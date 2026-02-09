@@ -1,1 +1,31 @@
-
+{
+  "level_id": "train_v1",
+  "units": "cm",
+  "world_bounds": { "min_x": -10, "max_x": 370, "min_y": -50, "max_y": 30 },
+  "player_spawn": { "x": 6, "y": -21, "facing": 1 },
+  "rects": [
+    { "id": "GroundMain", "type": "Solid", "x": 180, "y": -25.5, "w": 360, "h": 1 },
+    { "id": "WallL", "type": "Wall", "x": -4.5, "y": -10, "w": 1, "h": 40 },
+    { "id": "WallR", "type": "Wall", "x": 364.5, "y": -10, "w": 1, "h": 40 },
+    { "id": "OneA", "type": "OneWay", "x": 40, "y": -14.5, "w": 24, "h": 1 },
+    { "id": "OneB", "type": "OneWay", "x": 92, "y": -10.5, "w": 24, "h": 1 },
+    { "id": "OneC", "type": "OneWay", "x": 160, "y": -7.5, "w": 26, "h": 1 },
+    { "id": "CP0", "type": "Checkpoint", "x": 8, "y": -21, "w": 2, "h": 2, "respawn_x": 6, "respawn_y": -21, "respawn_facing": 1 },
+    { "id": "CP1", "type": "Checkpoint", "x": 140, "y": -6, "w": 2, "h": 2, "respawn_x": 138, "respawn_y": -6, "respawn_facing": 1 },
+    { "id": "TR_BOSS", "type": "Trigger", "kind": "BossTrigger", "x": 280, "y": -21, "w": 8, "h": 6 },
+    { "id": "DoorBoss", "type": "Door", "x": 268, "y": -19, "w": 1, "h": 12, "locked_initially": false },
+    { "id": "DoorExit", "type": "Door", "x": 352, "y": -19, "w": 1, "h": 12, "locked_initially": true },
+    { "id": "GOAL", "type": "Trigger", "kind": "Goal", "x": 358, "y": -21, "w": 4, "h": 4 }
+  ],
+  "enemies": [
+    { "id": "E1", "type": "melee_basic", "x": 30, "y": -20.2, "w": 1, "h": 1.6, "hp": 110 },
+    { "id": "E2", "type": "melee_basic", "x": 55, "y": -13.2, "w": 1, "h": 1.6, "hp": 110 },
+    { "id": "E3", "type": "ranged_rifle", "x": 82, "y": -9.9, "w": 1.2, "h": 1.2, "hp": 95 },
+    { "id": "E4", "type": "ranged_rifle", "x": 112, "y": -20.4, "w": 1.2, "h": 1.2, "hp": 95 },
+    { "id": "E5", "type": "ranged_shotgun", "x": 150, "y": -6.9, "w": 1.2, "h": 1.2, "hp": 105 },
+    { "id": "E6", "type": "ranged_shotgun", "x": 176, "y": -20.4, "w": 1.2, "h": 1.2, "hp": 105 },
+    { "id": "E7", "type": "melee_basic", "x": 208, "y": -20.2, "w": 1, "h": 1.6, "hp": 110 },
+    { "id": "E8", "type": "ranged_rifle", "x": 240, "y": -20.4, "w": 1.2, "h": 1.2, "hp": 95 }
+  ],
+  "boss": { "id": "BOSS", "type": "boss_v1", "x": 300, "y": -20.2, "w": 2.6, "h": 2.6 }
+}
