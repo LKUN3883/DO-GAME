@@ -70,18 +70,25 @@ function resetAll() {
 
 function sampleInput() {
   const map = {
-    A: !!keyRaw.get('KeyA'), D: !!keyRaw.get('KeyD'), S: !!keyRaw.get('KeyS'),
-    Jump: !!keyRaw.get('KeyW') || !!keyRaw.get('Space'), F: !!keyRaw.get('KeyF'),
-    LMB: !!keyRaw.get('Mouse0'), RMB: !!keyRaw.get('Mouse2')
+    A: !!keyRaw.get('KeyA'),
+    D: !!keyRaw.get('KeyD'),
+    S: !!keyRaw.get('KeyS'),
+    Jump: !!keyRaw.get('KeyW') || !!keyRaw.get('Space'),
+    F: !!keyRaw.get('KeyF'),
+    LMB: !!keyRaw.get('Mouse0'),
+    RMB: !!keyRaw.get('Mouse2')
   };
+
   for (const k in input) {
     input[k].prev = input[k].down;
-    input[k].down = !!map[k];
+    input[k].down = map[k];                 // ❗没有 !
     if (state.player.respawn_lock > 0) input[k].down = false;
-    input[k].just_pressed = input[k].down && !input[k].prev;
-    input[k].just_released = !input[k].down && input[k].prev;
+    input[k].just_pressed  =  input[k].down && !input[k].prev;
+    input[k].just_released = !input[k].down &&  input[k].prev;
   }
-  mx = clamp(mx,0,1279); my = clamp(my,0,719);
+
+  mx = clamp(mx, 0, 1279);
+  my = clamp(my, 0, 719);
 }
 
 function blockers(includeOneWay=false) {
