@@ -21,8 +21,23 @@ const input = {
 };
 let mx = 640; let my = 360;
 
-window.addEventListener('keydown', (e) => keyRaw.set(e.code, true));
-window.addEventListener('keyup', (e) => keyRaw.set(e.code, false));
+const gameKeys = new Set(['KeyA','KeyD','KeyS','KeyW','Space','KeyF']);
+window.addEventListener('keydown', (e) => {
+  if (gameKeys.has(e.code)) e.preventDefault();
+  keyRaw.set(e.code, true);
+});
+window.addEventListener('keyup', (e) => {
+  if (gameKeys.has(e.code)) e.preventDefault();
+  keyRaw.set(e.code, false);
+});
+// A lost keyup must never leave the player moving indefinitely.
+function releaseAllInputs() {
+  keyRaw.clear();
+}
+window.addEventListener('blur', releaseAllInputs);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) releaseAllInputs();
+});
 canvas.addEventListener('mousemove', (e) => {
   const r = canvas.getBoundingClientRect();
   mx = Math.round(e.clientX - r.left);
