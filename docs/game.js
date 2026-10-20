@@ -130,7 +130,7 @@ function resolveAxis(obj, dx, dy) {
       }
     }
     if (!hits.length) break;
-    const sorted = hits.sort((a,b)=>dy>0?((a.y-a.h/2)-(b.y-b.h/2)||a.id.localeCompare(b.id)):((b.y+b.h/2)-(a.y+b.h/2)||a.id.localeCompare(b.id)));
+    const sorted = hits.sort((a,b)=>dy>0?((a.y-a.h/2)-(b.y-b.h/2)||a.id.localeCompare(b.id)):((b.y+b.h/2)-(a.y+a.h/2)||a.id.localeCompare(b.id)));
     const o = sorted[0];
     if (dy>0) obj.y = o.y-o.h/2-obj.h/2-EPS;
     if (dy<0) {
@@ -215,7 +215,7 @@ function updateLogic() {
       const b=state.boss;
       if (b.alive && !b.dead) {
         const to={x:b.x-p.x,y:b.y-p.y};
-        if (len(to)<=3.2+EPS && dot(norm(to),aim)>=0.5) state.hits.push({src:'p_melee',id:'BOSS',damage:80});
+        if (!p.melee.hit.has('BOSS') && len(to)<=3.2+EPS && dot(norm(to),aim)>=0.5) { state.hits.push({src:'p_melee',id:'BOSS',damage:80}); p.melee.hit.add('BOSS'); }
       }
     }
     if (p.melee.t<=0) p.melee=null;
