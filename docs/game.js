@@ -228,8 +228,7 @@ function updateLogic() {
     while (state.p_fire_cd<=0) {
       if (p.ammo<=0) state.hint={text:'弹药不足',t:0.6};
       else {
-        p.ammo-=1;
-        spawnProjectile({x:p.x+aim.x*0.8,y:p.y+aim.y*0.8,vx:aim.x*30,vy:aim.y*30,w:0.25,h:0.1,damage:9,owner:'player'});
+        if (spawnProjectile({x:p.x+aim.x*0.8,y:p.y+aim.y*0.8,vx:aim.x*30,vy:aim.y*30,w:0.25,h:0.1,damage:9,owner:'player'})) p.ammo-=1;
       }
       state.p_fire_cd += interval;
     }
@@ -245,7 +244,24 @@ function updateLogic() {
   if (state.hint.t>0) state.hint.t=Math.max(0,state.hint.t-DT); else if(state.game_state!=='WIN') state.hint.text='';
 }
 
-function spawnProjectile(pr) { pr.age=0; pr.destroyed=false; pr.spawn_seq=state.spawn_seq++; state.projectiles.push(pr); }
+function spawnProjectile(pr) {
+  // Blueprint 13.4: backtrack at most 0.80 cm in 0.05 cm steps if spawned inside terrain.
+  const blocked = () => blockers(true).some(r=>overlap(aabb(pr),aabb(r)));
+  if (blocked()) {
+    const speed = Math.hypot(pr.vx,pr.vy);
+    if (speed<=0) return false;
+    const ux=pr.vx/speed, uy=pr.vy/speed;
+    let clear=false;
+    for (let step=1;step<=16;step++) {
+      pr.x-=ux*0.05; pr.y-=uy*0.05;
+      if (!blocked()) { clear=true; break; }
+    }
+    if (!clear) return false;
+  }
+  pr.age=0; pr.destroyed=false; pr.spawn_seq=state.spawn_seq++;
+  state.projectiles.push(pr);
+  return true;
+}
 
 function updateEnemies() {
   const p=state.player;
