@@ -157,10 +157,11 @@ function updateLogic() {
   const downThrough = p.grounded && p.standing_oneway_id && input.S.down && input.Jump.just_pressed;
   if (downThrough) { p.ignore_oneway_id = p.standing_oneway_id; p.ignore_timer = 0.2; }
 
-  if (p.grounded && input.Jump.just_pressed && !downThrough) { p.vy=53.334; p.jump_ascend=true; p.jump_t=0; }
+  const jumpedThisFrame = p.grounded && input.Jump.just_pressed && !downThrough;
+  if (jumpedThisFrame) { p.vy=53.334; p.jump_ascend=true; p.jump_t=0; }
   if (p.jump_ascend) { p.jump_t+=DT; if (p.jump_t>0.3||p.vy<=0) p.jump_ascend=false; }
 
-  if (!p.grounded && !p.dash && !state.grapple.mode.startsWith('pull') && input.Jump.just_pressed && !p.dash_used) {
+  if (!jumpedThisFrame && !p.grounded && !p.dash && !state.grapple.mode.startsWith('pull') && input.Jump.just_pressed && !p.dash_used) {
     if (p.st>=30) { p.st-=30; p.dash_used=true; p.dash={dir:aim,left:6}; p.vx=0; p.vy=0; }
     else { state.hint={text:'体力不足',t:0.5}; }
   }
