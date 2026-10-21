@@ -91,3 +91,23 @@ test('inactive boss does not appear as an attackable active boss',async()=>{
   g.run('render()');
   assert.ok(g.labels.some(x=>x.startsWith('BOSS HP')),'active boss bar must be visible');
 });
+
+test('ranged enemy cannot detect the player through a solid wall',async()=>{
+  const g=await game();
+  g.tick(60);
+  g.run("state.enemies=[{id:'E_TEST',type:'ranged_rifle',alive:true,x:12,y:state.player.y,w:1.2,h:1.2,hp:95,vx:0,vy:0,grounded:false,shoot_cd:0,discovered:false,exclaim_t:0}]; state.rects.push({id:'SIGHT_TEST_WALL',type:'Wall',x:9,y:-21,w:1,h:8});");
+  g.tick(1);
+  assert.equal(g.run('state.enemies[0].discovered'),false);
+  assert.equal(g.run('state.projectiles.filter(p=>p.owner==="enemy").length'),0);
+  g.run("state.rects=state.rects.filter(r=>r.id!=='SIGHT_TEST_WALL')");
+  g.tick(1);
+  assert.equal(g.run('state.enemies[0].discovered'),true);
+  assert.ok(g.run('state.enemies[0].exclaim_t')>0);
+});
+
+test('boss cannot be damaged before its trigger',async()=>{
+  const g=await game();
+  g.run("state.projectiles.push({owner:'player',x:300,y:-20,vx:0,vy:0,w:1,h:1,damage:9,spawn_seq:0,age:0,destroyed:false})");
+  g.tick(1);
+  assert.equal(g.run('state.boss.hp'),420);
+});
