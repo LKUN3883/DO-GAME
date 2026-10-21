@@ -24,6 +24,7 @@ jobs:
       - run: npm run test:browser
         env:
           BROWSER_SCREENSHOT: test-artifacts/boss-room.png
+      - run: npm run test:playthrough
       - uses: actions/upload-artifact@v4
         if: always()
         with:

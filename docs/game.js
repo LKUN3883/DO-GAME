@@ -112,6 +112,7 @@ function blockers(includeOneWay=false) {
   return state.rects.filter(r=>['Solid','Wall'].includes(r.type) || (r.type==='Door'&&r.locked) || (includeOneWay&&r.type==='OneWay'));
 }
 function playerAimDir() {
+  if (state.game_state==='WIN' && state.win_aim) return state.win_aim;
   if (state.player.respawn_lock>0) return {x:state.player.facing,y:0};
   const mw = { x: state.cam.x - VIEW_HW + (mx / PX_PER_CM), y: state.cam.y + VIEW_HH - (my / PX_PER_CM) };
   const raw = {x:mw.x-state.player.x,y:mw.y-state.player.y};
@@ -420,31 +421,60 @@ function updateEnemies() {
   }
 }
 
+function fireBossVolley(shotgun) {
+  const b=state.boss,p=state.player;
+  let d=norm({x:p.x-b.x,y:p.y-b.y});
+  if (len(d)<=EPS) d={x:1,y:0};
+  const angles=shotgun?[-15,-7.5,0,7.5,15]:[0];
+  for (const deg of angles) {
+    const a=Math.atan2(d.y,d.x)+deg*Math.PI/180;
+    const x=Math.cos(a),y=Math.sin(a),speed=shotgun?20:26;
+    spawnProjectile({x:b.x+x*0.8,y:b.y+y*0.8,vx:x*speed,vy:y*speed,
+      w:shotgun?0.18:0.22,h:shotgun?0.18:0.1,damage:shotgun?4:2,owner:'boss'});
+  }
+}
+
 function updateBoss() {
   const b=state.boss,p=state.player;
-  if (!b.active || !b.alive) return;
-  if (b.dead) return;
+  if (!b.active || !b.alive || b.dead) return;
   if (b.hp<=210){ b.charge_t += DT; while (b.charge_t>=3.8){b.charge_t-=3.8; b.charge_pending=true;} }
   b.phase_t -= DT;
   b.shoot_cd -= DT;
+  if (b.phase!=='rifle' && b.phase!=='shotgun') b.shoot_cd=Math.max(0,b.shoot_cd);
   if (b.phase==='rifle') {
-    while (b.shoot_cd<=0){const d=norm({x:p.x-b.x,y:p.y-b.y});spawnProjectile({x:b.x+d.x*0.8,y:b.y+d.y*0.8,vx:d.x*26,vy:d.y*26,w:0.22,h:0.1,damage:2,owner:'boss'});b.shoot_cd+=0.1;}
+    while (b.shoot_cd<=0){fireBossVolley(false);b.shoot_cd+=0.1;}
     if (b.phase_t<=0){b.phase='idleA';b.phase_t=0.5;}
-  } else if (b.phase==='idleA') {
-    if (b.charge_pending){b.phase='warn';b.phase_t=0.2;b.charge_pending=false;}
-    else if (b.phase_t<=0){b.phase='shotgun';b.phase_t=0; b.shot_count=0; b.shoot_cd=0;}
+  } else if (b.phase==='idleA' || b.phase==='idleB') {
+    const next=b.phase==='idleA'?'shotgun':'rifle';
+    if (b.charge_pending) {
+      b.charge_next=next;b.phase='warn';b.phase_t=0.2;b.warning_t=0;b.charge_pending=false;
+    } else if (b.phase_t<=0) {
+      b.phase=next;b.phase_t=next==='rifle'?2:0;b.shot_count=0;
+      // The first volley belongs to the tick in which the attack starts.
+      fireBossVolley(next==='shotgun');
+      b.shoot_cd=next==='rifle'?0.1:0.9;
+      if (next==='shotgun') b.shot_count=1;
+    }
   } else if (b.phase==='shotgun') {
-    while (b.shoot_cd<=0&&b.shot_count<4){const d=norm({x:p.x-b.x,y:p.y-b.y});for(const deg of[-15,-7.5,0,7.5,15]){const a=Math.atan2(d.y,d.x)+deg*Math.PI/180;spawnProjectile({x:b.x+Math.cos(a)*0.8,y:b.y+Math.sin(a)*0.8,vx:Math.cos(a)*20,vy:Math.sin(a)*20,w:0.18,h:0.18,damage:4,owner:'boss'});}b.shot_count++;b.shoot_cd+=0.9;}
-    if (b.shot_count>=4 && b.shoot_cd>0){b.phase='idleB';b.phase_t=0.6;}
-  } else if (b.phase==='idleB') {
-    if (b.charge_pending){b.phase='warn';b.phase_t=0.2;b.charge_pending=false;}
-    else if (b.phase_t<=0){b.phase='rifle';b.phase_t=2.0; b.shoot_cd=0;}
-  } else if (b.phase==='warn' && b.phase_t<=0) { b.phase='charge'; b.charge={dir:p.x>b.x?1:-1,left:6}; }
+    while (b.shoot_cd<=0 && b.shot_count<4) {
+      fireBossVolley(true);b.shot_count++;b.shoot_cd+=0.9;
+    }
+    if (b.shot_count>=4){b.phase='idleB';b.phase_t=0.6;}
+  } else if (b.phase==='warn') {
+    b.warning_t+=DT;
+    if (b.phase_t<=0) {b.phase='charge';b.charge={dir:p.x>b.x?1:-1,left:6};}
+  }
   if (b.phase==='charge') {
-    const step=Math.min(18*DT,b.charge.left); b.vx=b.charge.dir*18;b.vy=0; resolveAxis(b,b.vx*DT,0); b.charge.left-=step;
+    const step=Math.min(18*DT,b.charge.left);
+    b.vx=b.charge.dir*18;b.vy=0;
+    const blocked=resolveAxis(b,b.charge.dir*step,0);
+    b.charge.left-=step;
     if (overlap(aabb(b),aabb(p))) state.hits.push({src:'boss_charge',to:'player',damage:18});
-    if (b.charge.left<=EPS || b.vx===0){b.phase='rifle';b.phase_t=2;b.shoot_cd=0;b.vx=0;b.vy=0;}
-  } else { b.vy=Math.max(-15,b.vy-180*DT); resolveAxis(b,0,b.vy*DT); }
+    if (b.charge.left<=EPS || blocked) {
+      b.phase=b.charge_next||'rifle';b.phase_t=b.phase==='rifle'?2:0;
+      b.shot_count=0;b.shoot_cd=0;b.charge=null;b.charge_next=null;b.vx=0;b.vy=0;
+    }
+  } else {b.vy=Math.max(-15,b.vy-180*DT);resolveAxis(b,0,b.vy*DT);}
 }
 
 function updateProjectiles() {
@@ -491,7 +521,7 @@ function resolveDamage() {
   if (maxP>0 && p.iframe<=0) { p.hp -= maxP; p.iframe=0.45; }
   const b=state.boss;
   if (b.active && b.alive && !b.dead && b.hp<=0) {
-    b.dead=true; b.death_t=0.8; state.boss_mode=false;
+    b.dead=true; b.death_t=0.8; b.death_new=true;
   }
 }
 
@@ -499,7 +529,18 @@ function cleanup() {
   state.projectiles = state.projectiles.filter(p=>!p.destroyed);
   for (const e of state.enemies) if (e.alive && e.hp<=0) e.alive=false;
   const b=state.boss;
-  if (b.dead) { b.death_t -= DT; if (b.death_t<=0){ b.alive=false; const db=state.rects.find(r=>r.id==='DoorBoss'); if (db) db.locked=false; } }
+  if (b.dead) {
+    // Logical mode exit is cleanup-owned; camera/door/UI remain for 0.8s.
+    state.boss_mode=false;
+    if (b.death_new) b.death_new=false;
+    else if (b.alive) {
+      b.death_t=Math.max(0,b.death_t-DT);
+      if (b.death_t<=0) {
+        b.alive=false;
+        const db=state.rects.find(r=>r.id==='DoorBoss');if (db) db.locked=false;
+      }
+    }
+  }
   state.hits = [];
 }
 
@@ -516,7 +557,7 @@ function postChecks() {
   }
   const goal=state.rects.find(r=>r.type==='Trigger'&&r.kind==='Goal');
   const ex=state.rects.find(r=>r.id==='DoorExit');
-  if (goal && ex && !ex.locked && overlap(aabb(p),aabb(goal))) { state.game_state='WIN'; state.hint={text:'通关',t:99999}; }
+  if (goal && ex && !ex.locked && overlap(aabb(p),aabb(goal))) { state.win_aim=playerAimDir();state.game_state='WIN'; state.hint={text:'通关',t:99999}; }
 
   if (p.hp<=0 || p.x<-5||p.x>365||p.y>20||p.y<-40) respawn();
   if (p.respawn_lock>0) p.respawn_lock--;
@@ -539,7 +580,7 @@ function updateCamera() {
   const dx=nx-state.cam.x, dy=ny-state.cam.y;
   const sp=Math.hypot(dx,dy)/DT;
   if (sp>20){const k=(20*DT)/Math.hypot(dx,dy); nx=state.cam.x+dx*k; ny=state.cam.y+dy*k;}
-  if (state.boss_mode){nx=clamp(nx,286,314);ny=clamp(ny,-21,-9);} else {nx=clamp(nx,16,344);ny=clamp(ny,-21,1);}
+  if (state.boss_mode || state.boss.dead && state.boss.alive){nx=clamp(nx,286,314);ny=clamp(ny,-21,-9);} else {nx=clamp(nx,16,344);ny=clamp(ny,-21,1);}
   state.cam.x=nx;state.cam.y=ny;
 }
 
@@ -552,7 +593,9 @@ function render() {
     drawRect(r,r.type==='OneWay'?'rgba(120,200,120,1)':r.type==='Door'?'rgba(200,140,80,1)':'rgba(120,120,120,1)');
   }
   for (const e of state.enemies.filter(e=>e.alive)) drawRect(e,e.type==='melee_basic'?'rgba(255,120,120,.86)':e.type==='ranged_rifle'?'rgba(255,170,80,.86)':'rgba(180,120,255,.86)');
-  if (state.boss.active && state.boss.alive) drawRect(state.boss,'rgba(255,200,80,.86)');
+  const b=state.boss;
+  const bossVisible=b.phase!=='warn' || Math.floor((b.warning_t+0.15)/0.25)%2===0;
+  if (b.active && b.alive && !b.dead && bossVisible) drawRect(b,'rgba(255,200,80,.86)');
   for (const p of state.projectiles) drawRect(p,p.owner==='player'?'rgba(235,235,235,1)':(p.w<0.2?'rgba(220,180,255,1)':'rgba(255,240,160,1)'));
   drawRect(state.player,'rgba(80,180,255,.86)');
   if (state.grapple.head || state.grapple.anchor) {
