@@ -98,10 +98,17 @@ function sampleInput() {
 
   for (const k in input) {
     input[k].prev = input[k].down;
-    input[k].down = map[k];                 // ❗没有 !
-    if (state.player.respawn_lock > 0) input[k].down = false;
-    input[k].just_pressed  =  input[k].down && !input[k].prev;
-    input[k].just_released = !input[k].down &&  input[k].prev;
+    if (state.player.respawn_lock > 0) {
+      // Mask down and both edge transitions for the full post-respawn frame.
+      input[k].down=false;
+      input[k].prev=false;
+      input[k].just_pressed=false;
+      input[k].just_released=false;
+    } else {
+      input[k].down=map[k];
+      input[k].just_pressed=input[k].down && !input[k].prev;
+      input[k].just_released=!input[k].down && input[k].prev;
+    }
   }
 
   mx = clamp(mx, 0, 1279);
@@ -251,6 +258,35 @@ function resolveAxis(obj, dx, dy) {
   return collided;
 }
 
+// Blueprint 21.1.5: separate only the player from living, active characters.
+function separatePlayerBodies() {
+  const p=state.player;
+  const targets=[
+    ...state.enemies.filter(e=>e.alive),
+    ...(state.boss.active && state.boss.alive && !state.boss.dead?[state.boss]:[])
+  ];
+  for (const other of targets) {
+    if (!overlap(aabb(p),aabb(other))) continue;
+    const xDepth=(p.w+other.w)/2-Math.abs(p.x-other.x);
+    const yDepth=(p.h+other.h)/2-Math.abs(p.y-other.y);
+    if (xDepth<=yDepth+EPS) p.x+=(p.x>=other.x?1:-1)*(Math.max(0,xDepth)+2*EPS);
+    else p.y+=(p.y>=other.y?1:-1)*(Math.max(0,yDepth)+2*EPS);
+    // The one allowed terrain correction may zero velocity, not body separation.
+    const terrain=blockers(false).find(r=>penetrates(aabb(p),aabb(r)));
+    if (terrain) {
+      const txDepth=(p.w+terrain.w)/2-Math.abs(p.x-terrain.x);
+      const tyDepth=(p.h+terrain.h)/2-Math.abs(p.y-terrain.y);
+      if (txDepth<=tyDepth+EPS) {
+        p.x+=(p.x>=terrain.x?1:-1)*(Math.max(0,txDepth)+2*EPS);
+        p.vx=0;
+      } else {
+        p.y+=(p.y>=terrain.y?1:-1)*(Math.max(0,tyDepth)+2*EPS);
+        p.vy=0;
+      }
+    }
+  }
+}
+
 function updateLogic() {
   // Assertion A/F points: fixed order + one-frame just_pressed in sampleInput.
   sampleInput();
@@ -349,6 +385,7 @@ function updateLogic() {
     }
   } else state.p_fire_cd=Math.max(state.p_fire_cd,0);
 
+  separatePlayerBodies();
   updateCamera();
   updateEnemies();
   updateBoss();
@@ -359,6 +396,9 @@ function updateLogic() {
   postChecks();
   p.st = Math.min(100, p.st+12*DT);
   if (state.hint.t>0) state.hint.t=Math.max(0,state.hint.t-DT); else if(state.game_state!=='WIN') state.hint.text='';
+  // Respawn is the last update stage. Its input lock applies to the next tick.
+  if (p.hp<=0 || p.x<-5 || p.x>365 || p.y>20 || p.y<-40) respawn();
+  else if (p.respawn_lock>0) p.respawn_lock--;
 }
 
 function spawnProjectile(pr) {
@@ -545,6 +585,9 @@ function resolveDamage() {
 
 function cleanup() {
   state.projectiles = state.projectiles.filter(p=>!p.destroyed);
+  const p=state.player;
+  // Projectile deletion belongs to the cleanup stage, even on a death tick.
+  if (p.hp<=0 || p.x<-5 || p.x>365 || p.y>20 || p.y<-40) state.projectiles=[];
   for (const e of state.enemies) if (e.alive && e.hp<=0) e.alive=false;
   const b=state.boss;
   if (b.dead) {
@@ -585,16 +628,59 @@ function postChecks() {
   const ex=state.rects.find(r=>r.id==='DoorExit');
   if (goal && ex && !ex.locked && overlap(aabb(p),aabb(goal))) { state.win_aim=playerAimDir();state.game_state='WIN'; state.hint={text:'通关',t:99999}; }
 
-  if (p.hp<=0 || p.x<-5||p.x>365||p.y>20||p.y<-40) respawn();
-  if (p.respawn_lock>0) p.respawn_lock--;
+}
+
+// Blueprint 23.6: bounded minimum-axis correction at checkpoint spawn.
+function correctRespawnOverlap() {
+  const p=state.player;
+  for (let i=0;i<8;i++) {
+    const terrain=blockers(false).find(r=>overlap(aabb(p),aabb(r)));
+    if (!terrain) return true;
+    const xDepth=(p.w+terrain.w)/2-Math.abs(p.x-terrain.x);
+    const yDepth=(p.h+terrain.h)/2-Math.abs(p.y-terrain.y);
+    if (xDepth<=yDepth+EPS) p.x+=(p.x>=terrain.x?1:-1)*(Math.max(0,xDepth)+2*EPS);
+    else p.y+=(p.y>=terrain.y?1:-1)*(Math.max(0,yDepth)+2*EPS);
+  }
+  return !blockers(false).some(r=>overlap(aabb(p),aabb(r)));
 }
 
 function respawn() {
+  const p=state.player;
+  const cp=state.rects.filter(r=>r.type==='Checkpoint').sort((a,b)=>
+    Math.hypot(p.x-a.x,p.y-a.y)-Math.hypot(p.x-b.x,p.y-b.y))[0]
+    || {respawn_x:level.player_spawn.x,respawn_y:level.player_spawn.y,respawn_facing:level.player_spawn.facing};
+  Object.assign(p,{
+    x:cp.respawn_x,y:cp.respawn_y,facing:cp.respawn_facing,
+    vx:0,vy:0,w:1,h:2,hp:100,st:100,ammo:60,
+    grounded:false,standing_oneway_id:'',dash_used:false,dash:null,
+    jump_t:0,jump_ascend:false,slide:null,crouch:false,melee:null,iframe:0,
+    ignore_oneway_id:'',ignore_timer:0,respawn_lock:1
+  });
   state.grapple=emptyGrapple();
-  const cp = state.rects.filter(r=>r.type==='Checkpoint').sort((a,b)=>Math.hypot(state.player.x-a.x,state.player.y-a.y)-Math.hypot(state.player.x-b.x,state.player.y-b.y))[0] || {respawn_x:level.player_spawn.x,respawn_y:level.player_spawn.y,respawn_facing:level.player_spawn.facing};
-  Object.assign(state.player,{x:cp.respawn_x,y:cp.respawn_y,vx:0,vy:0,hp:100,st:100,ammo:60,dash_used:false,dash:null,iframe:0,ignore_oneway_id:'',ignore_timer:0,jump_ascend:false,slide:null,crouch:false,facing:cp.respawn_facing,respawn_lock:1});
-  state.projectiles=[];
-  if (state.boss_mode){state.boss_mode=false; const db=state.rects.find(r=>r.id==='DoorBoss'); if (db) db.locked=false; state.boss.active=false; state.boss.phase='rifle'; state.boss.phase_t=2; state.boss.charge_pending=false; state.boss.charge_t=0;}
+  state.hint={text:'',t:0};
+  state.p_fire_cd=0;
+  if (state.boss_mode) {
+    state.boss_mode=false;
+    const db=state.rects.find(r=>r.id==='DoorBoss');
+    if (db) db.locked=false;
+    Object.assign(state.boss,{
+      active:false,phase:'rifle',phase_t:2,shoot_cd:0,shot_count:0,
+      charge_t:0,charge_pending:false,charge:null,charge_next:null,warning_t:0,
+      vx:0,vy:0
+    });
+  }
+  if (!correctRespawnOverlap()) {
+    const cp0=state.rects.find(r=>r.id==='CP0' && r.type==='Checkpoint');
+    if (cp0) {
+      p.x=cp0.respawn_x;p.y=cp0.respawn_y;p.facing=cp0.respawn_facing;
+    } else {
+      p.x=level.player_spawn.x;p.y=level.player_spawn.y;p.facing=level.player_spawn.facing;
+    }
+    if (!correctRespawnOverlap()) {
+      p.x=level.player_spawn.x;p.y=level.player_spawn.y;
+      p.vx=0;p.vy=0;
+    }
+  }
 }
 
 function updateCamera() {
