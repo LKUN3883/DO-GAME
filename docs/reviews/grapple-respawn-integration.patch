@@ -22,7 +22,7 @@
    if (g.stuck_frames>=3) { g.mode='stuck'; p.vx=0; p.vy=0; }
 @@ -325,7 +326,7 @@
    if (input.RMB.just_pressed && state.grapple.mode==='none') spawnGrapple(aim);
- 
+
    if (pulling) {
 -    moveGrapplePlayer(input_x);
 +    moveGrapplePlayer(input_x,separatePlayerBodies);
@@ -32,7 +32,7 @@
 @@ -389,7 +390,7 @@
      }
    } else state.p_fire_cd=Math.max(state.p_fire_cd,0);
- 
+
 -  separatePlayerBodies();
 +  if (!pulling) separatePlayerBodies();
    updateCamera();
