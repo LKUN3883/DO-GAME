@@ -17,4 +17,7 @@ jobs:
         with:
           node-version: '22'
       - run: node --check docs/game.js
-      - run: node --test tests/smoke.test.cjs
+      - run: npm ci
+      - run: npm test
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:browser

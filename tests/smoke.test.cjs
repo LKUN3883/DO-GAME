@@ -1,48 +1,6 @@
-const test = require('node:test');
-const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const vm = require('node:vm');
-const path = require('node:path');
-
-async function game() {
-  const root = path.join(__dirname, '..', 'docs');
-  const handlers = {};
-  const labels = [];
-  const context2d = new Proxy({}, {
-    get(_, key) {
-      if (key === 'fillText') return (value) => labels.push(String(value));
-      return () => {};
-    },
-    set() { return true; },
-  });
-  const canvas = {
-    getContext: () => context2d,
-    getBoundingClientRect: () => ({left:0, top:0, width:1280, height:720}),
-    addEventListener: (name, fn) => { handlers['canvas:'+name] = fn; },
-  };
-  const scope = vm.createContext({
-    document: {
-      getElementById: () => canvas,
-      addEventListener: (name, fn) => {handlers['document:'+name] = fn;},
-      hidden: false,
-    },
-    window: {addEventListener:(name, fn) => {handlers[name] = fn;}},
-    fetch: async () => ({json: async () => JSON.parse(fs.readFileSync(path.join(root, 'level_train_v1.json'),'utf8'))}),
-    performance: {now:()=>0},
-    requestAnimationFrame:()=>{},
-    console,
-    Math,
-    Map,
-    Set,
-  });
-  vm.runInContext(fs.readFileSync(path.join(root,'game.js'),'utf8'),scope,{filename:'docs/game.js'});
-  await new Promise(resolve => setImmediate(resolve));
-  const run = (code) => vm.runInContext(code,scope);
-  const tick = (n=1) => {for(let k=0;k<n;k++) run('updateLogic(); updateCamera();');};
-  const key = (name, down) => handlers[down?'keydown':'keyup']({code:name, preventDefault() {}});
-  const mouse = (button,down) => handlers[down?'canvas:mousedown':'canvas:mouseup']({button});
-  return {run,tick,key,mouse,labels};
-}
+const test=require('node:test');
+const assert=require('node:assert/strict');
+const {game}=require('./game-harness.cjs');
 
 test('grounded A/D movement does not teleport and stops after key release',async()=>{
   const g=await game();
@@ -81,7 +39,7 @@ test('grapple flies and can pull player toward an obstacle',async()=>{
   assert.equal(g.run('state.grapple.mode'),'none');
 });
 
-test('inactive boss does not appear as an attackable active boss',async()=>{
+test('boss health bar appears after entering the boss trigger',async()=>{
   const g=await game();
   assert.equal(g.run('state.boss.active'),false);
   g.run('render()');

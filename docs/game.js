@@ -44,7 +44,7 @@ canvas.addEventListener('mousemove', (e) => {
   my = Math.round(e.clientY - r.top);
 });
 canvas.addEventListener('mousedown', (e) => { if (e.button === 0) keyRaw.set('Mouse0', true); if (e.button === 2) keyRaw.set('Mouse2', true);});
-canvas.addEventListener('mouseup', (e) => { if (e.button === 0) keyRaw.set('Mouse0', false); if (e.button === 2) keyRaw.set('Mouse2', false);});
+window.addEventListener('mouseup', (e) => { if (e.button === 0) keyRaw.set('Mouse0', false); if (e.button === 2) keyRaw.set('Mouse2', false);});
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
 const clamp = (x,a,b)=>Math.min(Math.max(x,a),b);
@@ -121,6 +121,7 @@ function playerAimDir() {
 
 function resolveAxis(obj, dx, dy) {
   const prev = {x:obj.x,y:obj.y};
+  let collided = false;
   obj.x += dx;
   for (let i=0;i<8;i++) {
     const hits = blockers(false).filter(r=>Math.min(obj.y+obj.h/2,r.y+r.h/2)-Math.max(obj.y-obj.h/2,r.y-r.h/2)>EPS*2 && penetrates(aabb(obj),aabb(r)));
@@ -129,6 +130,11 @@ function resolveAxis(obj, dx, dy) {
     const o = sorted[0];
     if (dx>0) obj.x = o.x-o.w/2-obj.w/2-EPS; else if (dx<0) obj.x = o.x+o.w/2+obj.w/2+EPS;
     obj.vx=0;
+    collided = true;
+  }
+  if (dx!==0 && blockers(false).some(r=>Math.min(obj.y+obj.h/2,r.y+r.h/2)-Math.max(obj.y-obj.h/2,r.y-r.h/2)>EPS*2 && penetrates(aabb(obj),aabb(r)))) {
+    obj.x=prev.x; obj.y=prev.y; obj.vx=0; obj.vy=0;
+    return true;
   }
   const preY = obj.y;
   obj.y += dy;
@@ -156,8 +162,15 @@ function resolveAxis(obj, dx, dy) {
       if (o.type==='OneWay') obj.standing_oneway_id=o.id;
     }
     obj.vy=0;
+    collided = true;
+  }
+  if (dy!==0 && blockers(false).some(r=>penetrates(aabb(obj),aabb(r)))) {
+    obj.x=prev.x; obj.y=prev.y; obj.vx=0; obj.vy=0;
+    obj.grounded=false; obj.standing_oneway_id='';
+    return true;
   }
   if (obj.y===prev.y && obj.x===prev.x && (dx!==0||dy!==0)) { obj.vx=0; obj.vy=0; }
+  return collided;
 }
 
 function updateLogic() {
@@ -208,9 +221,9 @@ function updateLogic() {
   if (p.dash) {
     const step = Math.min(50*DT,p.dash.left);
     p.vx = p.dash.dir.x*50; p.vy = p.dash.dir.y*50;
-    resolveAxis(p,p.dash.dir.x*step,p.dash.dir.y*step);
+    const blocked = resolveAxis(p,p.dash.dir.x*step,p.dash.dir.y*step);
     p.dash.left -= step;
-    if (p.dash.left<=EPS || p.vx===0&&p.vy===0) { p.dash=null; p.vx=0; p.vy=0; }
+    if (p.dash.left<=EPS || blocked) { p.dash=null; p.vx=0; p.vy=0; }
   } else {
     if (p.slide) {
       p.slide.t += DT;
@@ -254,17 +267,6 @@ function updateLogic() {
         if (len(to)<=3.2+EPS && dot(norm(to),aim)>=0.5) {
           state.hits.push({src:'p_melee',id:e.id,damage:80});
           p.melee.hit.add(e.id);
-          const direction=len(to)<=EPS?{x:p.facing,y:0}:norm(to);
-          const original={x:e.x,y:e.y};
-          e.x+=direction.x*0.6; e.y+=direction.y*0.6;
-          if (blockers(false).some(r=>overlap(aabb(e),aabb(r)))) {
-            let clear=false;
-            for (let n=1;n<=12;n++) {
-              e.x-=direction.x*0.05; e.y-=direction.y*0.05;
-              if (!blockers(false).some(r=>overlap(aabb(e),aabb(r)))) { clear=true; break; }
-            }
-            if (!clear) {e.x=original.x;e.y=original.y;}
-          }
         }
       }
       const b=state.boss;
@@ -471,7 +473,19 @@ function resolveDamage() {
     if (h.to==='player') maxP = Math.max(maxP,h.damage);
     if (h.id) {
       if (h.id==='BOSS') state.boss.hp -= h.damage;
-      else { const e=state.enemies.find(x=>x.id===h.id&&x.alive); if (e) e.hp -= h.damage; }
+      else { const e=state.enemies.find(x=>x.id===h.id&&x.alive); if (e) {
+        e.hp -= h.damage;
+        if (h.src==='p_melee') {
+          const before={x:e.x,y:e.y};
+          let dir=norm({x:e.x-p.x,y:e.y-p.y});
+          if (len(dir)<=EPS) dir={x:p.facing,y:0};
+          e.x=before.x+dir.x*0.6; e.y=before.y+dir.y*0.6;
+          for (let n=1;n<=12 && blockers(false).some(r=>penetrates(aabb(e),aabb(r)));n++) {
+            e.x=before.x+dir.x*(0.6-n*0.05); e.y=before.y+dir.y*(0.6-n*0.05);
+          }
+          if (blockers(false).some(r=>penetrates(aabb(e),aabb(r)))) Object.assign(e,before);
+        }
+      } }
     }
   }
   if (maxP>0 && p.iframe<=0) { p.hp -= maxP; p.iframe=0.45; }
