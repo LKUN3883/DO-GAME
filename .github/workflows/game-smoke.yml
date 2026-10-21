@@ -4,6 +4,7 @@ on:
     branches:
       - repair/blueprint-bugs-pass1
       - repair/grapple-ch14
+      - integration/respawn-grapple-20261021
   pull_request:
     branches:
       - main
