@@ -123,7 +123,7 @@ function resolveAxis(obj, dx, dy) {
   const prev = {x:obj.x,y:obj.y};
   obj.x += dx;
   for (let i=0;i<8;i++) {
-    const hits = blockers(false).filter(r=>penetrates(aabb(obj),aabb(r)));
+    const hits = blockers(false).filter(r=>Math.min(obj.y+obj.h/2,r.y+r.h/2)-Math.max(obj.y-obj.h/2,r.y-r.h/2)>EPS*2 && penetrates(aabb(obj),aabb(r)));
     if (!hits.length) break;
     const sorted = hits.sort((a,b)=>dx>0?((a.x-a.w/2)-(b.x-b.w/2)||a.id.localeCompare(b.id)):((b.x+b.w/2)-(a.x+a.w/2)||a.id.localeCompare(b.id)));
     const o = sorted[0];
@@ -189,11 +189,20 @@ function updateLogic() {
   }
 
   // grapple
-  if (input.RMB.just_released) state.grapple={mode:'none',head:null,anchor:null,target:null,local:null,stuck_frames:0,end:false};
+  if (input.RMB.just_released) endGrapple();
   if (input.RMB.just_pressed && state.grapple.mode==='none') {
     let hx=p.x+aim.x*0.9, hy=p.y+aim.y*0.9;
     const head={x:hx,y:hy,w:0.3,h:0.3,vx:aim.x*28,vy:aim.y*28,origin:{x:hx,y:hy}};
-    state.grapple={mode:'fly',head,anchor:null,target:null,local:null,stuck_frames:0,end:false};
+    const blocked=()=>blockers(true).some(r=>overlap(aabb(head),aabb(r)));
+    let valid=!blocked();
+    if (!valid) for(let i=1;i<=18;i++) {
+      head.x-=aim.x*0.05;head.y-=aim.y*0.05;
+      if (!blocked()){valid=true;break;}
+    }
+    if (valid) {
+      head.origin={x:head.x,y:head.y};
+      state.grapple={mode:'fly',head,anchor:null,target:null,local:null,stuck_frames:0,end:false};
+    }
   }
 
   if (p.dash) {
@@ -208,13 +217,27 @@ function updateLogic() {
       const sp=Math.max(0,10-(10/0.9)*p.slide.t);
       p.vx=p.slide.dir*sp;
       if (sp<=0 || !p.grounded) p.slide=null;
+    } else if (state.grapple.mode==='pull') {
+      const pull = norm({x:state.grapple.anchor.x-p.x,y:state.grapple.anchor.y-p.y});
+      p.vx=pull.x*10+input_x*3;
+      p.vy=pull.y*10;
+    } else if (state.grapple.mode==='stuck') {
+      p.vx=0; p.vy=0;
     } else {
       p.vx=input_x*8;
       if (p.grounded && p.vx!==0 && input.S.just_pressed) p.slide={dir:p.facing,t:0};
     }
-    if (!p.jump_ascend && !state.grapple.mode.startsWith('pull')) p.vy = Math.max(-15,p.vy + (-180)*DT);
+    if (!p.jump_ascend && !state.grapple.mode.startsWith('pull') && state.grapple.mode!=='stuck') p.vy = Math.max(-15,p.vy + (-180)*DT);
     if (p.jump_ascend) p.vy += (-177.78)*DT;
+    const prior={x:p.x,y:p.y};
     resolveAxis(p,p.vx*DT,p.vy*DT);
+    if (state.grapple.mode==='pull') {
+      const travel=norm({x:state.grapple.anchor.x-prior.x,y:state.grapple.anchor.y-prior.y});
+      const advance=dot({x:p.x-prior.x,y:p.y-prior.y},travel);
+      state.grapple.stuck_frames=advance<=EPS?state.grapple.stuck_frames+1:0;
+      if (state.grapple.stuck_frames>=3) {state.grapple.mode='stuck';p.vx=0;p.vy=0;}
+      else if (Math.hypot(p.x-state.grapple.anchor.x,p.y-state.grapple.anchor.y)<=0.8+EPS) endGrapple();
+    }
   }
 
   if (p.grounded) p.dash_used=false;
@@ -228,7 +251,21 @@ function updateLogic() {
       for (const e of state.enemies.filter(e=>e.alive)) {
         if (p.melee.hit.has(e.id)) continue;
         const to={x:e.x-p.x,y:e.y-p.y};
-        if (len(to)<=3.2+EPS && dot(norm(to),aim)>=0.5) { state.hits.push({src:'p_melee',id:e.id,damage:80}); p.melee.hit.add(e.id); }
+        if (len(to)<=3.2+EPS && dot(norm(to),aim)>=0.5) {
+          state.hits.push({src:'p_melee',id:e.id,damage:80});
+          p.melee.hit.add(e.id);
+          const direction=len(to)<=EPS?{x:p.facing,y:0}:norm(to);
+          const original={x:e.x,y:e.y};
+          e.x+=direction.x*0.6; e.y+=direction.y*0.6;
+          if (blockers(false).some(r=>overlap(aabb(e),aabb(r)))) {
+            let clear=false;
+            for (let n=1;n<=12;n++) {
+              e.x-=direction.x*0.05; e.y-=direction.y*0.05;
+              if (!blockers(false).some(r=>overlap(aabb(e),aabb(r)))) { clear=true; break; }
+            }
+            if (!clear) {e.x=original.x;e.y=original.y;}
+          }
+        }
       }
       const b=state.boss;
       if (b.alive && !b.dead) {
@@ -254,12 +291,52 @@ function updateLogic() {
 
   updateEnemies();
   updateBoss();
+  updateGrapple();
   updateProjectiles();
   resolveDamage(); // Assertion B point
   cleanup(); // Assertion C/E point
   postChecks();
   p.st = Math.min(100, p.st+12*DT);
   if (state.hint.t>0) state.hint.t=Math.max(0,state.hint.t-DT); else if(state.game_state!=='WIN') state.hint.text='';
+}
+
+function endGrapple() {
+  state.grapple={mode:'none',head:null,anchor:null,target:null,local:null,stuck_frames:0,end:false};
+}
+
+function updateGrapple() {
+  const g=state.grapple;
+  if (g.mode==='none' || g.mode==='stuck') return;
+  if (g.mode==='pull') {
+    if (g.target) {
+      const target=g.target==='BOSS'?state.boss:state.enemies.find(e=>e.id===g.target && e.alive);
+      if (!target || !target.alive || target.dead) {endGrapple();return;}
+      g.anchor={x:target.x+g.local.x,y:target.y+g.local.y};
+    }
+    return;
+  }
+  if (g.mode!=='fly' || !g.head) return;
+  const h=g.head;
+  h.x+=h.vx*DT;h.y+=h.vy*DT;
+  const targets=[
+    ...state.enemies.filter(e=>e.alive).map(e=>({priority:0,obj:e})),
+    ...(state.boss.active && state.boss.alive && !state.boss.dead?[{priority:0,obj:state.boss}]:[]),
+    ...state.rects.filter(r=>r.type==='OneWay').map(obj=>({priority:1,obj})),
+    ...blockers(false).map(obj=>({priority:2,obj}))
+  ].filter(t=>overlap(aabb(h),aabb(t.obj)));
+  targets.sort((a,b)=>a.priority-b.priority ||
+    Math.hypot(a.obj.x-h.x,a.obj.y-h.y)-Math.hypot(b.obj.x-h.x,b.obj.y-h.y) ||
+    a.obj.id.localeCompare(b.obj.id));
+  if (targets.length) {
+    const hit=targets[0].obj;
+    const x=clamp(h.x,hit.x-hit.w/2,hit.x+hit.w/2);
+    const y=clamp(h.y,hit.y-hit.h/2,hit.y+hit.h/2);
+    g.anchor={x,y};
+    if (hit.type==='boss_v1' || hit.type==='melee_basic' || hit.type==='ranged_rifle' || hit.type==='ranged_shotgun') {
+      g.target=hit.id; g.local={x:x-hit.x,y:y-hit.y};
+    }
+    g.mode='pull';g.head=null;
+  } else if (Math.hypot(h.x-h.origin.x,h.y-h.origin.y)>40) endGrapple();
 }
 
 function spawnProjectile(pr) {
@@ -287,7 +364,9 @@ function updateEnemies() {
   for (const e of state.enemies.filter(e=>e.alive)) {
     e.vy=Math.max(-15,e.vy-180*DT);
     const inCam = overlap(aabb(e),aabb(vis));
+    if (!e.discovered && inCam) e.exclaim_t=0.5;
     e.discovered = inCam;
+    e.exclaim_t=Math.max(0,e.exclaim_t-DT);
     if (e.type==='melee_basic') {
       const dir = sign(p.x-e.x)||1;
       e.vx = e.discovered ? dir*5 : 0;
@@ -433,9 +512,21 @@ function render() {
     drawRect(r,r.type==='OneWay'?'rgba(120,200,120,1)':r.type==='Door'?'rgba(200,140,80,1)':'rgba(120,120,120,1)');
   }
   for (const e of state.enemies.filter(e=>e.alive)) drawRect(e,e.type==='melee_basic'?'rgba(255,120,120,.86)':e.type==='ranged_rifle'?'rgba(255,170,80,.86)':'rgba(180,120,255,.86)');
-  if (state.boss.alive) drawRect(state.boss,'rgba(255,200,80,.86)');
+  if (state.boss.active && state.boss.alive) drawRect(state.boss,'rgba(255,200,80,.86)');
   for (const p of state.projectiles) drawRect(p,p.owner==='player'?'rgba(235,235,235,1)':(p.w<0.2?'rgba(220,180,255,1)':'rgba(255,240,160,1)'));
   drawRect(state.player,'rgba(80,180,255,.86)');
+  if (state.grapple.head || state.grapple.anchor) {
+    const point=state.grapple.head || state.grapple.anchor;
+    const start=toScreen(state.player.x,state.player.y), end=toScreen(point.x,point.y);
+    ctx.strokeStyle='rgba(160,160,160,1)';ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(start.x,start.y);ctx.lineTo(end.x,end.y);ctx.stroke();
+    if (state.grapple.head) drawRect(state.grapple.head,'rgba(160,160,160,1)');
+  }
+  for (const enemy of state.enemies) {
+    if (!enemy.alive || enemy.exclaim_t<=0) continue;
+    const pos=toScreen(enemy.x,enemy.y+enemy.h/2);
+    ctx.fillStyle='white';ctx.fillText('!',pos.x,pos.y-12);
+  }
   const aim=playerAimDir();
   const s=toScreen(state.player.x,state.player.y), e=toScreen(state.player.x+aim.x*2,state.player.y+aim.y*2);
   ctx.strokeStyle='white';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(s.x,s.y);ctx.lineTo(e.x,e.y);ctx.stroke();
@@ -443,6 +534,7 @@ function render() {
   ctx.fillStyle='white'; ctx.font='20px sans-serif';
   ctx.fillText(`HP ${Math.round(state.player.hp)} ST ${Math.round(state.player.st)} AMMO ${state.player.ammo}`, 24, 32);
   if (state.hint.text && state.hint.t>0) ctx.fillText(state.hint.text, 24, 64);
+  if (state.boss.active && state.boss.alive) ctx.fillText(`BOSS HP ${Math.max(0,Math.round(state.boss.hp))}/420`,24,96);
 }
 
 let acc=0,last=performance.now();
