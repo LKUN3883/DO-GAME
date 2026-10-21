@@ -2,8 +2,9 @@
   "name": "do-game",
   "private": true,
   "scripts": {
-    "test": "node --test tests/repair.test.cjs tests/smoke.test.cjs tests/grapple.test.cjs",
+    "test": "node --test tests/repair.test.cjs tests/smoke.test.cjs tests/boss.test.cjs tests/grapple.test.cjs",
     "test:browser": "node --test tests/browser.test.cjs",
+    "test:playthrough": "node scripts/input-playthrough.cjs",
     "test:browser:grapple": "node tests/browser/playtest.cjs"
   },
   "devDependencies": {

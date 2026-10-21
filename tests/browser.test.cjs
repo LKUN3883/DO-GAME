@@ -107,3 +107,42 @@ test('browser: right mouse launches and pulls grapple, then release cancels it',
   await p.mouse.down({button:'right'});await advance(900);assert.ok(await run('state.player.x')>start+1);
   await p.mouse.up({button:'right'});await advance(30);assert.equal(await run('state.grapple.mode'),'none');
 });
+
+test('browser: Boss repeats rifle, pause, four-volley shotgun and pause cycle',async t=>{
+  const {run,advance}=await game(t);
+  await run("state.enemies=[];Object.assign(state.player,{x:290,y:-23.999,iframe:999});Object.assign(state.boss,{active:true,x:300,y:-23.699,phase:'rifle',phase_t:2,shoot_cd:0,hp:420});state.boss_mode=true");
+  const phases=['rifle'];
+  for(let i=0;i<65;i++) {await advance(100);const phase=await run('state.boss.phase');if(phase!==phases.at(-1))phases.push(phase);}
+  assert.deepEqual(phases.slice(0,5),['rifle','idleA','shotgun','idleB','rifle']);
+  assert.equal(await run('state.boss.dead'),false);
+});
+
+test('browser: second-phase warning flashes, then charge deals 18 once and resumes shotgun',async t=>{
+  const {run,advance}=await game(t);
+  await run("state.enemies=[];Object.assign(state.player,{x:302,y:-23.999,hp:100,iframe:0});Object.assign(state.boss,{active:true,x:300,y:-23.699,hp:210,phase:'idleA',phase_t:1,charge_pending:true});state.boss_mode=true;state.cam={x:300,y:-21}");
+  await advance(20);assert.equal(await run('state.boss.phase'),'warn');
+  const color=await run("state.boss.warning_t=0;render();Array.from(ctx.getImageData(640,468,1,1).data).join(',')");
+  const hidden=await run("state.boss.warning_t=0.11;render();Array.from(ctx.getImageData(640,468,1,1).data).join(',')");
+  assert.notEqual(color,hidden,'Boss body must actually blink on the Canvas');
+  await advance(540);assert.equal(await run('state.player.hp'),82);assert.equal(await run('state.boss.phase'),'shotgun');
+  assert.ok(Math.abs(await run('state.boss.x')-306)<1e-8);
+});
+
+test('browser: lethal melee stops Boss, retains death camera and door for 0.8s, then unlocks exit',async t=>{
+  const {p,run,advance}=await game(t);
+  await run("state.enemies=[];Object.assign(state.player,{x:298,y:-23.999,vx:0,vy:0});Object.assign(state.boss,{active:true,x:300,y:-23.699,hp:80,phase:'idleA',phase_t:100});state.boss_mode=true;state.cam={x:298,y:-21};state.rects.find(r=>r.id==='DoorBoss').locked=true");
+  await p.mouse.move(1100,360);await p.keyboard.down('f');await advance(20);await p.keyboard.up('f');
+  assert.equal(await run('state.boss.dead'),true);assert.equal(await run('state.boss_mode'),false);
+  await run('state.player.x=280;state.cam.x=286');await advance(740);
+  assert.equal(await run('state.boss.alive'),true);assert.equal(await run('state.cam.x'),286);
+  assert.equal(await run("state.rects.find(r=>r.id==='DoorBoss').locked"),true);
+  await advance(100);assert.equal(await run('state.boss.alive'),false);
+  assert.equal(await run("state.rects.find(r=>r.id==='DoorBoss').locked"),false);
+  assert.equal(await run("state.rects.find(r=>r.id==='DoorExit').locked"),false);
+  assert.ok(await run('state.cam.x')<286);
+  await run('state.player.x=358;state.player.y=-23;postChecks()');
+  const aim=await run('playerAimDir()');
+  await p.mouse.move(10,10);await p.keyboard.down('d');await advance(500);
+  assert.deepEqual(await run('playerAimDir()'),aim,'WIN also freezes the Aim line');
+  assert.equal(await run('state.player.x'),358);
+});

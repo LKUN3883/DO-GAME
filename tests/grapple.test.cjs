@@ -250,3 +250,22 @@ test('inactive Boss is not a grapple target',async()=>{
   g.run("state.boss={id:'BOSS',active:false,alive:true,dead:false,x:11.4,y:0,w:2.6,h:2.6,hp:420};spawnGrapple({x:1,y:0});updateGrapple()");
   assert.equal(g.run('state.grapple.mode'),'fly');
 });
+
+for (const mode of ['pull','stuck']) {
+  test(`14.9: ${mode} anchor follows damage-stage melee knockback before render`,async()=>{
+    const g=await arena();
+    g.run(`state.enemies=[{id:'E',alive:true,hp:110,x:12,y:0,w:1,h:1}];
+      spawnGrapple({x:1,y:0});state.grapple.head.x=11.4;updateGrapple();
+      state.grapple.mode='${mode}';
+      state.hits=[{src:'p_melee',id:'E',damage:80}];resolveDamage();cleanup();`);
+    near(g.run('state.grapple.anchor.x'),g.run('state.enemies[0].x+state.grapple.local.x'));
+    near(g.run('state.grapple.head.x'),g.run('state.grapple.anchor.x'));
+  });
+}
+
+test('pulling off the ground ends a slide so release cannot resume stale slide velocity',async()=>{
+  const g=await arena();anchor(g,'pull',20,8);
+  g.run('state.player.slide={dir:-1,t:0.1};state.player.grounded=true');
+  g.tick();assert.equal(g.run('state.player.grounded'),false);
+  assert.equal(g.run('state.player.slide'),null);
+});

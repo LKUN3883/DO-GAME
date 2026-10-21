@@ -31,7 +31,17 @@ jobs:
           node-version: '22'
       - run: npm ci
       - run: npx playwright install --with-deps chromium
+      - run: mkdir -p test-artifacts
       - run: npm run test:browser
+        env:
+          BROWSER_SCREENSHOT: test-artifacts/boss-room.png
+      - run: npm run test:playthrough
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chromium-boss-room-screenshot
+          path: test-artifacts/*.png
+          if-no-files-found: warn
       - run: npm run test:browser:grapple
         if: ${{ !cancelled() }}
       - uses: actions/upload-artifact@v4
