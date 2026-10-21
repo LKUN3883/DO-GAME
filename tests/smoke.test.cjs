@@ -63,9 +63,11 @@ test('one melee swing damages enemy once and knocks it back',async()=>{
   g.tick(60);
   g.run("state.enemies = [{id:'E_TEST',type:'melee_basic',alive:true,x:state.player.x+2,y:state.player.y,w:1,h:1.6,hp:110,vx:0,vy:0,grounded:true,melee_cd:100,discovered:false}]; mx=1279;my=360;");
   const before=g.run('state.enemies[0].x');
-  g.key('KeyF',true);g.tick(1);g.key('KeyF',false);g.tick(10);
-  assert.equal(g.run('state.enemies[0].hp'),30);
-  assert.ok(g.run('state.enemies[0].x')>before+0.3,'knockback moves enemy');
+  g.key('KeyF',true);g.tick(1);
+  const pushed=g.run('state.enemies[0].x');
+  assert.ok(pushed>before+0.3,'knockback moves enemy at hit frame');
+  g.key('KeyF',false);g.tick(10);
+  assert.equal(g.run('state.enemies[0].hp'),30,'each swing may hit the enemy only once');
 });
 
 test('grapple flies and can pull player toward an obstacle',async()=>{
