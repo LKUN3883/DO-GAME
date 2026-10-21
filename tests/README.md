@@ -1,11 +1,15 @@
 # Validation
 
-Run with Node (no third-party test dependencies):
+Run the logic suite with Node, and the browser suites with Playwright:
 
 ```sh
 node --check docs/game.js
 node --test tests/grapple.test.cjs
-node --test tests/*.test.cjs
+npm test
+npm ci
+npx playwright install --with-deps chromium
+npm run test:browser
+npm run test:browser:grapple
 ```
 
 The VM harness runs the real `docs/game.js` and loads the checked-in training
@@ -33,18 +37,44 @@ only release or anchored-character death ends it (respawn also clears all state)
 
 ## Validation status (2026-10-21)
 
-Based on `9fdae307412054f3bf69d833d5f0c250b4276f79`, the refreshed head of
-PR #2. All six upstream smoke scenarios are retained, including their corrected
-hit-frame knockback assertion and the newer line-of-sight/inactive-Boss cases.
-The shared harness is extracted to `tests/helpers/game.cjs`; each tick calls
-`updateLogic()` once, matching production (camera is already updated inside it).
+Integrated PR #2 through `d9f86d5b12e98a5237bcf1984bd55d67e94e89e4`,
+including collision rollback, first-contact Dash termination, window mouseup for
+both buttons, damage-stage knockback, seven Chromium regressions, and the
+user-approved Boss camera correction already recorded by that PR. Grapple
+parameters remain unchanged. All Node tests share `tests/game-harness.cjs`.
 
-The full suite passes all 38 tests (32 targeted grapple tests + 6 upstream smoke
-tests). The GitHub Actions workflow now runs `tests/*.test.cjs` on both repair
-branches and PRs to main/the base repair branch, picking up the new tests. This is not full-game blueprint certification. Other
-PR #2 audit items (player/body separation, collision rollback, enemy edge AI,
-respawn/checkpoints and unrelated UI) remain outside this repair.
+`npm test` passes 51 tests: 32 grapple tests plus the 19 upstream logic tests.
+GitHub Actions runs these tests and both browser suites on the repair branches
+and on PRs targeting main/the base repair branch.
 
-No Chromium playtest was completed: Playwright is present in the editing
-environment, but its browser executable is unavailable. Browser input bubbling,
-canvas appearance and interactive feel still require a real-browser check.
+## Actual Chromium coverage
+
+The local Playwright download failed because its CDN returned a 195-byte
+"Site Unavailable" HTML page in place of the ZIP. GitHub's Ubuntu runner
+successfully installed Chromium 151.0.7922.34 and Playwright 1.62.1.
+
+`tests/browser/playtest.cjs` runs six native-RAF scenarios in real Chromium:
+movement/release/A+D, jump plus single-use air Dash and landing, wall grapple
+pull/release, floor-anchored STUCK with attacks and outside-canvas release,
+Dash wall contact, and one Boss melee hit per swing. It uses actual HTTP,
+ES modules, fetch, Canvas, keyboard/mouse events and the running production
+loop. The server adds state-observation hooks; it does not replace physics.
+The wall, quiet and Boss fixtures isolate scenarios; the movement and jump
+scenarios use the unmodified training level. Screenshots and per-tick JSON are
+uploaded as the `chromium-playtest` workflow artifact.
+
+The six scenarios passed at `003e46a86d35ccaa19bf5b4bba4897398c5a6fee`:
+https://github.com/LKUN3883/DO-GAME/actions/runs/39608705271
+The first run's STUCK melee assertion failed because a synthetic test tap was
+shorter than one sampled logic frame (trace: no melee frames and ST stayed at
+100). Holding action keys across at least two ticks fixed the test. The game
+input definition was not changed or buffered to accommodate the test.
+
+`tests/browser.test.cjs` retains the seven upstream Chromium regressions with
+an explicitly paused Playwright clock, including OneWay, blocked shooting,
+blur, diagonal Dash contact, Boss melee and the approved Boss camera bounds.
+CI runs both suites on the integrated version; check the current run for its
+result. Headless browser automation and screenshot inspection are not a full
+human playthrough or an assessment of game feel. Mobile, other browsers,
+complete progression, Boss attack cycles and other remaining audit items have
+not been certified by these tests.

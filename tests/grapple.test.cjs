@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const {game} = require('./helpers/game.cjs');
+const {game} = require('./game-harness.cjs');
 
 async function arena() {
   const g=await game();

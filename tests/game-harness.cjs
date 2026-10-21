@@ -3,7 +3,7 @@ const vm = require('node:vm');
 const path = require('node:path');
 
 async function game() {
-  const root = path.join(__dirname, '..', '..', 'docs');
+  const root = path.join(__dirname, '..', 'docs');
   const handlers = {};
   const labels = [];
   const context2d = new Proxy({}, {
@@ -38,8 +38,9 @@ async function game() {
   const run = (code) => vm.runInContext(code,scope);
   const tick = (n=1) => {for(let k=0;k<n;k++) run('updateLogic();');};
   const key = (name, down) => handlers[down?'keydown':'keyup']({code:name, preventDefault() {}});
-  const mouse = (button,down) => handlers[down?'canvas:mousedown':'canvas:mouseup']({button});
+  const mouse = (button,down) => handlers[down?'canvas:mousedown':'mouseup']({button});
   return {run,tick,key,mouse,labels,handlers};
 }
 
-module.exports = {game};
+
+module.exports={game};
