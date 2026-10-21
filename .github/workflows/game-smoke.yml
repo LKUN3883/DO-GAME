@@ -35,18 +35,14 @@ jobs:
       - run: npm run test:browser
         env:
           BROWSER_SCREENSHOT: test-artifacts/boss-room.png
+      - run: npm run test:browser:grapple
+        if: ${{ !cancelled() }}
       - run: npm run test:playthrough
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: chromium-boss-room-screenshot
-          path: test-artifacts/*.png
+          name: chromium-acceptance
+          path: |
+            test-artifacts/*.png
+            browser-results/
           if-no-files-found: warn
-      - run: npm run test:browser:grapple
-        if: ${{ !cancelled() }}
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: chromium-playtest
-          path: browser-results/
-          if-no-files-found: ignore

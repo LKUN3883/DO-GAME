@@ -16,7 +16,7 @@ before(async()=>{
     let body=fs.readFileSync(path.join(root,name),'utf8');
     // Test-only access appended to the served module; production source, DOM,
     // input listeners, fetch, Canvas and RAF loop all run unchanged in Chromium.
-    if(name==='game.js') body+='\nwindow.__test={run:code=>eval(code)};';
+    if(name==='game.js') body+='\nwindow.__test={run:code=>eval(code)};const tracedTick=updateLogic;updateLogic=(...args)=>{window.__logic_ticks=(window.__logic_ticks||0)+1;return tracedTick(...args)};';
     res.end(body);
   });
   await new Promise(r=>server.listen(0,'127.0.0.1',r));base=`http://127.0.0.1:${server.address().port}`;
@@ -145,4 +145,49 @@ test('browser: lethal melee stops Boss, retains death camera and door for 0.8s, 
   await p.mouse.move(10,10);await p.keyboard.down('d');await advance(500);
   assert.deepEqual(await run('playerAimDir()'),aim,'WIN also freezes the Aim line');
   assert.equal(await run('state.player.x'),358);
+});
+
+
+async function oneLogicTick(p) {
+ const before=await p.evaluate(()=>window.__logic_ticks||0);
+ for(let i=0;i<25;i++){await p.clock.runFor(1);if(await p.evaluate(()=>window.__logic_ticks||0)>before)return;}
+ throw new Error('RAF did not advance a logic tick');
+}
+
+test('browser acceptance: natural death leaves one complete input-lock tick, then held actions resume',async t=>{
+ const {p,run}=await game(t);await run('state.enemies=[]');
+ await p.keyboard.down('d');await p.keyboard.down('f');await p.mouse.move(1000,360);await p.mouse.down();
+ await run('state.player.hp=0');await oneLogicTick(p);
+ assert.equal(await run('state.player.respawn_lock'),1);const x=await run('state.player.x');
+ await oneLogicTick(p);assert.equal(await run('state.player.x'),x);assert.equal(await run('state.player.ammo'),60);
+ assert.equal(await run('state.player.melee'),null);assert.equal(await run('Object.values(input).every(i=>!i.down&&!i.just_pressed&&!i.just_released)'),true);
+ await oneLogicTick(p);assert.ok(await run('state.player.x')>x);assert.equal(await run('state.player.ammo'),59);assert.ok(await run('!!state.player.melee'));
+});
+
+test('browser acceptance: crouch/roof/slide preserve geometry and prevent crawling through low space',async t=>{
+ const {p,run,advance}=await game(t);await run('state.enemies=[]');const foot=await run('state.player.y-state.player.h/2');
+ await p.keyboard.down('s');await advance(50);assert.equal(await run('state.player.h'),1);assert.ok(Math.abs(await run('state.player.y-state.player.h/2')-foot)<1e-8);
+ await run("state.rects.push({id:'CEILING',type:'Solid',x:6,y:-23.4,w:4,h:0.2})");await p.keyboard.up('s');await p.keyboard.down('d');await advance(150);
+ assert.equal(await run('state.player.h'),1);assert.equal(await run('state.player.x'),6);assert.equal(await run('blockers().some(r=>penetrates(aabb(state.player),aabb(r)))'),false);
+ await run("state.rects=state.rects.filter(r=>r.id!=='CEILING')");await p.keyboard.up('d');await advance(20);assert.equal(await run('state.player.h'),2);
+ await p.keyboard.down('d');await p.keyboard.down('s');await oneLogicTick(p);assert.equal(await run('state.player.vx'),10);
+ await run("state.rects.push({id:'SLIDE_STOP',type:'Wall',x:state.player.x+1.1,y:-23,w:1,h:6})");await advance(100);assert.equal(await run('state.player.slide'),null);assert.equal(await run('state.player.vx'),0);
+});
+
+test('browser acceptance: player cannot walk through an enemy body and body contact causes no damage',async t=>{
+ const {p,run,advance}=await game(t);
+ await run("state.enemies=[{id:'BODY',type:'ranged_rifle',alive:true,x:6.4,y:-23.999,w:1,h:2,hp:95,vx:0,vy:0,grounded:true,shoot_cd:100,exclaim_t:0}]");
+ await p.keyboard.down('d');await advance(300);
+ assert.equal(await run('penetrates(aabb(state.player),aabb(state.enemies[0]))'),false);
+ assert.ok(await run('state.player.x')<5.401);assert.equal(await run('state.enemies[0].x'),6.4);assert.equal(await run('state.player.hp'),100);
+});
+
+test('browser joint acceptance: enemy body cancels grapple advance, enters STUCK, and releases outside Canvas',async t=>{
+ const {p,run,advance}=await game(t);
+ await run("Object.assign(state.player,{x:10,y:-23.999,vx:0,vy:0,grounded:true});state.enemies=[{id:'ANCHOR_BODY',type:'ranged_rifle',alive:true,x:12.13,y:-24.399,w:1.2,h:1.2,hp:95,vx:0,vy:0,grounded:true,shoot_cd:10000,exclaim_t:0}];state.cam={x:16,y:-21}");
+ await p.mouse.move(485,496);await p.mouse.down({button:'right'});await advance(700);
+ assert.equal(await run('state.grapple.mode'),'stuck');const x=await run('state.player.x');
+ await p.keyboard.down('d');await p.keyboard.down('Space');await advance(300);
+ assert.equal(await run('state.player.x'),x);assert.equal(await run('state.player.vx'),0);assert.equal(await run('state.player.vy'),0);
+ await p.mouse.move(800,770);await p.mouse.up({button:'right'});await advance(30);assert.equal(await run('state.grapple.mode'),'none');
 });

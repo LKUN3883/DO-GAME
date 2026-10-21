@@ -38,7 +38,7 @@ window.addEventListener('blur', releaseAllInputs);
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) releaseAllInputs();
 });
-canvas.addEventListener('mousemove', (e) => {
+window.addEventListener('mousemove', (e) => {
   const r = canvas.getBoundingClientRect();
   mx = Math.round(e.clientX - r.left);
   my = Math.round(e.clientY - r.top);
@@ -52,6 +52,11 @@ const sign = (x)=>(x>0?1:(x<0?-1:0));
 const len = (v)=>Math.hypot(v.x,v.y);
 const norm = (v)=>{const l=len(v); return l<=EPS?{x:0,y:0}:{x:v.x/l,y:v.y/l};};
 const dot = (a,b)=>a.x*b.x+a.y*b.y;
+const idCompare=(a,b)=>{const x=Array.from(a),y=Array.from(b);for(let i=0;i<Math.min(x.length,y.length);i++){const d=x[i].codePointAt(0)-y[i].codePointAt(0);if(d)return d;}return x.length-y.length;};
+const metricCompare=(a,b,measure)=>{const d=measure(a)-measure(b);return Math.abs(d)<=EPS?idCompare(a.id,b.id):d;};
+let attackQueue=null;
+// Fixed-duration states live on the 60 Hz grid; rate timers retain section 3.4.
+const fixedCountdown=t=>Math.max(0,Math.round(t/DT)-1)*DT;
 
 const aabb = (o)=>({min_x:o.x-o.w/2,max_x:o.x+o.w/2,min_y:o.y-o.h/2,max_y:o.y+o.h/2});
 const overlap = (a,b)=>a.min_x<=b.max_x+EPS&&a.max_x>=b.min_x-EPS&&a.min_y<=b.max_y+EPS&&a.max_y>=b.min_y-EPS;
@@ -71,7 +76,7 @@ async function boot() {
 function resetAll() {
   const p = level.player_spawn;
   const rects = level.rects.map(r=>({...r, locked:r.type==='Door'?!!r.locked_initially:undefined}));
-  const enemies = [...level.enemies].sort((a,b)=>a.id.localeCompare(b.id)).map(e=>({ ...e, alive:true, discovered:false, exclaim_t:0, grounded:false, vx:0, vy:0, melee_cd:0, shoot_cd:0 }));
+  const enemies = [...level.enemies].sort((a,b)=>idCompare(a.id,b.id)).map(e=>({ ...e, alive:true, discovered:false, exclaim_t:0, grounded:false, vx:0, vy:0, melee_cd:0, shoot_cd:0 }));
   state = {
     game_state:'RUN',
     player:{x:p.x,y:p.y,vx:0,vy:0,w:1,h:2,facing:p.facing,grounded:false,standing_oneway_id:'',ignore_oneway_id:'',ignore_timer:0,hp:100,st:100,ammo:60,iframe:0,dash_used:false,dash:null,jump_t:0,jump_ascend:false,crouch:false,slide:null,melee:null,respawn_lock:0},
@@ -80,7 +85,7 @@ function resetAll() {
     grapple:emptyGrapple(),
     cam:{x:p.x,y:p.y},
     hint:{text:'',t:0},
-    boss_mode:false,
+    boss_mode:false,pending_respawn:false,aim_input_locked:false,checkpoint_inside:'',
     hits:[],
   };
 }
@@ -98,8 +103,10 @@ function sampleInput() {
 
   for (const k in input) {
     input[k].prev = input[k].down;
-    input[k].down = map[k];                 // ❗没有 !
-    if (state.player.respawn_lock > 0) input[k].down = false;
+    input[k].down = map[k];
+    if (state.player.respawn_lock > 0) {
+      input[k].prev=false;input[k].down=false;input[k].just_pressed=false;input[k].just_released=false;continue;
+    }
     input[k].just_pressed  =  input[k].down && !input[k].prev;
     input[k].just_released = !input[k].down &&  input[k].prev;
   }
@@ -113,7 +120,7 @@ function blockers(includeOneWay=false) {
 }
 function playerAimDir() {
   if (state.game_state==='WIN' && state.win_aim) return state.win_aim;
-  if (state.player.respawn_lock>0) return {x:state.player.facing,y:0};
+  if (state.player.respawn_lock>0 || state.aim_input_locked) return {x:state.player.facing,y:0};
   const mw = { x: state.cam.x - VIEW_HW + (mx / PX_PER_CM), y: state.cam.y + VIEW_HH - (my / PX_PER_CM) };
   const raw = {x:mw.x-state.player.x,y:mw.y-state.player.y};
   if (len(raw)<=EPS) return {x:state.player.facing,y:0};
@@ -153,15 +160,16 @@ function refreshGrappleAnchor() {
     g.head.x=g.anchor.x; g.head.y=g.anchor.y;
   }
 }
-function moveGrapplePlayer(input_x) {
+function moveGrapplePlayer(input_x, separateBodies=()=>{}) {
   const g=state.grapple,p=state.player;
   refreshGrappleAnchor();
-  if (g.mode==='stuck') { p.vx=0; p.vy=0; return; }
-  if (Math.hypot(g.anchor.x-p.x,g.anchor.y-p.y)<=0.8+EPS) { endGrapple(); return; }
+  if (g.mode==='stuck') { p.vx=0; p.vy=0;separateBodies(); return; }
+  if (Math.hypot(g.anchor.x-p.x,g.anchor.y-p.y)<=0.8+EPS) { endGrapple();separateBodies(); return; }
   const prev={x:p.x,y:p.y};
   const dir=norm({x:g.anchor.x-prev.x,y:g.anchor.y-prev.y});
   p.vx=dir.x*10+input_x*3; p.vy=dir.y*10;
   resolveAxis(p,p.vx*DT,p.vy*DT);
+  separateBodies();
   const advance=dot({x:p.x-prev.x,y:p.y-prev.y},dir);
   g.stuck_frames=advance<=EPS ? g.stuck_frames+1 : 0;
   if (g.stuck_frames>=3) { g.mode='stuck'; p.vx=0; p.vy=0; }
@@ -181,7 +189,7 @@ function updateGrapple() {
   const groups=[characters,state.rects.filter(r=>r.type==='OneWay'),blockers(false)];
   for (const group of groups) {
     const hits=group.filter(t=>overlap(aabb(h),aabb(t)));
-    hits.sort((a,b)=>Math.hypot(a.x-h.x,a.y-h.y)-Math.hypot(b.x-h.x,b.y-h.y) || (a.id<b.id?-1:a.id>b.id?1:0));
+    hits.sort((a,b)=>Math.hypot(a.x-h.x,a.y-h.y)-Math.hypot(b.x-h.x,b.y-h.y) || idCompare(a.id,b.id));
     if (!hits.length) continue;
     const target=hits[0],box=aabb(target);
     g.target=target;
@@ -204,7 +212,7 @@ function resolveAxis(obj, dx, dy) {
   for (let i=0;i<8;i++) {
     const hits = blockers(false).filter(r=>Math.min(obj.y+obj.h/2,r.y+r.h/2)-Math.max(obj.y-obj.h/2,r.y-r.h/2)>EPS*2 && penetrates(aabb(obj),aabb(r)));
     if (!hits.length) break;
-    const sorted = hits.sort((a,b)=>dx>0?((a.x-a.w/2)-(b.x-b.w/2)||a.id.localeCompare(b.id)):((b.x+b.w/2)-(a.x+a.w/2)||a.id.localeCompare(b.id)));
+    const sorted=hits.sort((a,b)=>metricCompare(a,b,r=>dx>0?r.x-r.w/2:-(r.x+r.w/2)));
     const o = sorted[0];
     if (dx>0) obj.x = o.x-o.w/2-obj.w/2-EPS; else if (dx<0) obj.x = o.x+o.w/2+obj.w/2+EPS;
     obj.vx=0;
@@ -231,7 +239,7 @@ function resolveAxis(obj, dx, dy) {
       }
     }
     if (!hits.length) break;
-    const sorted = hits.sort((a,b)=>dy>0?((a.y-a.h/2)-(b.y-b.h/2)||a.id.localeCompare(b.id)):((b.y+b.h/2)-(a.y+a.h/2)||a.id.localeCompare(b.id)));
+    const sorted=hits.sort((a,b)=>metricCompare(a,b,r=>dy>0?r.y-r.h/2:-(r.y+r.h/2)));
     const o = sorted[0];
     if (dy>0) obj.y = o.y-o.h/2-obj.h/2-EPS;
     if (dy<0) {
@@ -251,12 +259,70 @@ function resolveAxis(obj, dx, dy) {
   return collided;
 }
 
+function separation(obj,other) {
+  const dx=(obj.w+other.w)/2-Math.abs(obj.x-other.x);
+  const dy=(obj.h+other.h)/2-Math.abs(obj.y-other.y);
+  const axis=dx<=dy+EPS?'x':'y';
+  const direction=obj[axis]>=other[axis]?1:-1;
+  return {axis,delta:direction*((axis==='x'?dx:dy)+EPS)};
+}
+function separateTerrain(obj,limit=8) {
+  for(let i=0;i<limit;i++) {
+    const hit=blockers().find(r=>penetrates(aabb(obj),aabb(r)));
+    if(!hit)return true;
+    const move=separation(obj,hit);obj[move.axis]+=move.delta;
+    obj[move.axis==='x'?'vx':'vy']=0;
+  }
+  return !blockers().some(r=>penetrates(aabb(obj),aabb(r)));
+}
+function separatePlayerBodies() {
+  const p=state.player;
+  const actors=[...state.enemies.filter(e=>e.alive),...(state.boss.active&&state.boss.alive&&!state.boss.dead?[state.boss]:[])];
+  for(const actor of actors) {
+    if(!overlap(aabb(p),aabb(actor)))continue;
+    const move=separation(p,actor);const direction=p[move.axis]>=actor[move.axis]?1:-1;
+    p[move.axis]+=move.delta+direction*EPS;
+    const blocked=blockers().some(r=>penetrates(aabb(p),aabb(r)));
+    if(blocked) {
+      separateTerrain(p,1);
+      if(p.dash){p.dash=null;p.vx=0;p.vy=0;}
+    }
+  }
+}
+function setPlayerHeight(height) {
+  const p=state.player;p.y+=(height-p.h)/2;p.h=height;
+}
+function canStandPlayer() {
+  const p=state.player,standing={...p,h:2,y:p.y-p.h/2+1};
+  return !blockers().some(r=>penetrates(aabb(standing),aabb(r)));
+}
+function finishSlide() {
+  const p=state.player;p.slide=null;p.vx=0;
+  p.crouch=input.S.down || !canStandPlayer();setPlayerHeight(p.crouch?1:2);
+}
+function prepareStance(input_x,pulling) {
+  const p=state.player;
+  if(pulling || p.dash)return;
+  if(p.slide)return;
+  if(p.grounded && input_x!==0 && input.S.just_pressed) {
+    p.slide={dir:p.facing,t:0,frames:0};p.crouch=false;setPlayerHeight(1);return;
+  }
+  const crouch=(p.grounded && input_x===0 && input.S.down) ||
+    (p.crouch && input.S.down) || !canStandPlayer();
+  p.crouch=crouch;setPlayerHeight(crouch?1:2);
+}
+function playerDied() {
+  const p=state.player;return p.hp<=0 || p.x<-5 || p.x>365 || p.y>20 || p.y<-40;
+}
+
 function updateLogic() {
-  // Assertion A/F points: fixed order + one-frame just_pressed in sampleInput.
+  if(state.game_state!=='RUN')return;
+  state.aim_input_locked=state.player.respawn_lock>0;
   sampleInput();
   const p=state.player;
+  const priorHint=state.hint;
   p.iframe=Math.max(0,p.iframe-DT);
-  p.ignore_timer-=DT; if (p.ignore_timer<=0){p.ignore_timer=0;p.ignore_oneway_id='';}
+  p.ignore_timer=fixedCountdown(p.ignore_timer); if (p.ignore_timer<=0){p.ignore_timer=0;p.ignore_oneway_id='';}
 
   let input_x = (input.A.down?-1:0)+(input.D.down?1:0); if (input.A.down&&input.D.down) input_x=0;
   if (input_x!==0) p.facing=input_x;
@@ -268,8 +334,9 @@ function updateLogic() {
   const downThrough = !pulling && p.grounded && p.standing_oneway_id && input.S.down && input.Jump.just_pressed;
   if (downThrough) { p.ignore_oneway_id = p.standing_oneway_id; p.ignore_timer = 0.2; }
 
-  const jumpedThisFrame = !pulling && p.grounded && input.Jump.just_pressed && !downThrough;
-  if (jumpedThisFrame) { p.vy=53.334; p.jump_ascend=true; p.jump_t=0; }
+  prepareStance(input_x,pulling);
+  const jumpedThisFrame = !pulling && p.grounded && input.Jump.just_pressed && !downThrough && canStandPlayer();
+  if (jumpedThisFrame) { p.crouch=false;p.slide=null;setPlayerHeight(2);p.vy=53.334; p.jump_ascend=true; p.jump_t=0; }
   if (p.jump_ascend) { p.jump_t+=DT; if (p.jump_t>0.3||p.vy<=0) p.jump_ascend=false; }
 
   if (!jumpedThisFrame && !p.grounded && !p.dash && !pulling && input.Jump.just_pressed && !p.dash_used) {
@@ -285,10 +352,10 @@ function updateLogic() {
   if (input.RMB.just_pressed && state.grapple.mode==='none') spawnGrapple(aim);
 
   if (pulling) {
-    moveGrapplePlayer(input_x);
-    if (p.slide) {
+    moveGrapplePlayer(input_x,separatePlayerBodies);
+    if(p.slide) {
       p.slide.t+=DT;
-      if (p.slide.t>=0.9 || !p.grounded || p.vx===0) p.slide=null;
+      if(p.slide.t>=0.9 || !p.grounded || p.vx===0){p.slide=null;p.crouch=p.h===1;}
     }
   } else if (p.dash) {
     const step = Math.min(50*DT,p.dash.left);
@@ -298,27 +365,45 @@ function updateLogic() {
     if (p.dash.left<=EPS || blocked) { p.dash=null; p.vx=0; p.vy=0; }
   } else {
     if (p.slide) {
-      p.slide.t += DT;
-      const sp=Math.max(0,10-(10/0.9)*p.slide.t);
-      p.vx=p.slide.dir*sp;
-      if (sp<=0 || !p.grounded) p.slide=null;
-    } else {
-      p.vx=input_x*8;
-      if (p.grounded && p.vx!==0 && input.S.just_pressed) p.slide={dir:p.facing,t:0};
+      p.slide.t=(p.slide.frames??Math.round(p.slide.t/DT))*DT;
+      p.vx=p.slide.dir*Math.max(0,10-(10/0.9)*p.slide.t);
+    } else p.vx=p.crouch?0:input_x*8;
+    if (!p.jump_ascend) p.vy=Math.max(-15,p.vy-180*DT);
+    if (p.jump_ascend) p.vy-=177.78*DT;
+    const blocked=resolveAxis(p,p.vx*DT,p.vy*DT);
+    if(p.slide) {
+      p.slide.frames=(p.slide.frames??0)+1;
+      if(!p.grounded || p.vx===0 || p.slide.frames>=54)finishSlide();
     }
-    if (!p.jump_ascend) p.vy = Math.max(-15,p.vy + (-180)*DT);
-    if (p.jump_ascend) p.vy += (-177.78)*DT;
-    resolveAxis(p,p.vx*DT,p.vy*DT);
   }
+  if(p.grounded)p.dash_used=false;
+  if(!pulling)separatePlayerBodies();
+  updateCamera();
+  attackQueue=[];
+  updateEnemies();
+  updateBoss();
+  generateAttacks(playerAimDir());
+  updateProjectiles();
+  updateGrapple();
+  resolveDamage();
+  state.pending_respawn=playerDied();
+  cleanup();
+  postChecks();
+  p.st=Math.min(100,p.st+12*DT);
+  if(state.hint===priorHint && state.hint.t>0)state.hint.t=fixedCountdown(state.hint.t);
+  if(state.hint.t<=0 && state.game_state!=='WIN')state.hint.text='';
+  if(state.aim_input_locked && p.respawn_lock>0)p.respawn_lock--;
+  if(state.pending_respawn)respawn();
+}
 
-  if (p.grounded) p.dash_used=false;
-  p.crouch = p.grounded && p.vx===0 && input.S.down;
-  p.h = (p.crouch || p.slide) ? 1 : 2;
+function generateAttacks(aim) {
+  const queued=attackQueue||[];attackQueue=null;
+  const p=state.player;
 
   if (p.melee) {
-    p.melee.t -= DT;
+    p.melee.t=fixedCountdown(p.melee.t);
     if (p.melee.window>0){
-      p.melee.window -= DT;
+      p.melee.window=fixedCountdown(p.melee.window);
       for (const e of state.enemies.filter(e=>e.alive)) {
         if (p.melee.hit.has(e.id)) continue;
         const to={x:e.x-p.x,y:e.y-p.y};
@@ -349,19 +434,19 @@ function updateLogic() {
     }
   } else state.p_fire_cd=Math.max(state.p_fire_cd,0);
 
-  updateCamera();
-  updateEnemies();
-  updateBoss();
-  updateProjectiles();
-  updateGrapple(); // 21.1.10: head movement/hit detection, after character movement.
-  resolveDamage(); // Assertion B point
-  cleanup(); // Assertion C/E point
-  postChecks();
-  p.st = Math.min(100, p.st+12*DT);
-  if (state.hint.t>0) state.hint.t=Math.max(0,state.hint.t-DT); else if(state.game_state!=='WIN') state.hint.text='';
+  for(const pr of queued) {
+    if(pr._source){pr.x+=pr._source.x-pr._origin_x;pr.y+=pr._source.y-pr._origin_y;}
+    delete pr._source;delete pr._origin_x;delete pr._origin_y;
+    spawnProjectile(pr);
+  }
 }
 
 function spawnProjectile(pr) {
+  if(attackQueue) {
+    if(pr._source){pr._origin_x=pr._source.x;pr._origin_y=pr._source.y;}
+    attackQueue.push(pr);return true;
+  }
+  delete pr._source;
   // Blueprint 13.4: backtrack at most 0.80 cm in 0.05 cm steps if spawned inside terrain.
   const blocked = () => blockers(true).some(r=>overlap(aabb(pr),aabb(r)));
   if (blocked()) {
@@ -414,11 +499,17 @@ function updateEnemies() {
     if (e.type==='melee_basic') {
       const dir = sign(p.x-e.x)||1;
       e.vx = e.discovered ? dir*5 : 0;
-      e.melee_cd-=DT;
-      if (e.discovered && Math.hypot(p.x-e.x,p.y-e.y)<=1.2+EPS && e.melee_cd<=0) {
-        state.hits.push({src:'e_melee',damage:22,to:'player'});
-        e.melee_cd += 1/1.1;
+      if(e.grounded) {
+        const foot_x=e.x+dir*e.w/2,foot_y=e.y-e.h/2-EPS;
+        const support=state.rects.some(r=>['Solid','OneWay'].includes(r.type) &&
+          foot_x>=r.x-r.w/2-EPS && foot_x<=r.x+r.w/2+EPS &&
+          foot_y>=r.y+r.h/2-EPS && foot_y-0.3<=r.y+r.h/2+EPS);
+        if(!support)e.vx=0;
       }
+      e.melee_cd-=DT;
+      if(e.discovered && Math.hypot(p.x-e.x,p.y-e.y)<=1.2+EPS) {
+        while(e.melee_cd<=0){state.hits.push({src:'e_melee',damage:22,to:'player'});e.melee_cd+=1/1.1;}
+      } else e.melee_cd=Math.max(0,e.melee_cd);
     } else {
       e.vx=0;
       const R = e.type==='ranged_rifle'?8:0.85;
@@ -426,10 +517,10 @@ function updateEnemies() {
       e.shoot_cd-=DT;
       if (e.discovered) {
         while (e.shoot_cd<=0) {
-          const dir=norm({x:p.x-e.x,y:p.y-e.y});
-          if (e.type==='ranged_rifle') spawnProjectile({x:e.x+dir.x*0.8,y:e.y+dir.y*0.8,vx:dir.x*26,vy:dir.y*26,w:0.22,h:0.1,damage:2,owner:'enemy'});
+          let dir=norm({x:p.x-e.x,y:p.y-e.y});if(len(dir)<=EPS)dir={x:1,y:0};
+          if (e.type==='ranged_rifle') spawnProjectile({x:e.x+dir.x*0.8,y:e.y+dir.y*0.8,vx:dir.x*26,vy:dir.y*26,w:0.22,h:0.1,damage:2,owner:'enemy',_source:e});
           else for (const deg of [-15,-7.5,0,7.5,15]) {
-            const a=Math.atan2(dir.y,dir.x)+deg*Math.PI/180; spawnProjectile({x:e.x+Math.cos(a)*0.8,y:e.y+Math.sin(a)*0.8,vx:Math.cos(a)*20,vy:Math.sin(a)*20,w:0.18,h:0.18,damage:4,owner:'enemy'});
+            const a=Math.atan2(dir.y,dir.x)+deg*Math.PI/180; spawnProjectile({x:e.x+Math.cos(a)*0.8,y:e.y+Math.sin(a)*0.8,vx:Math.cos(a)*20,vy:Math.sin(a)*20,w:0.18,h:0.18,damage:4,owner:'enemy',_source:e});
           }
           e.shoot_cd += interval;
         }
@@ -448,15 +539,19 @@ function fireBossVolley(shotgun) {
     const a=Math.atan2(d.y,d.x)+deg*Math.PI/180;
     const x=Math.cos(a),y=Math.sin(a),speed=shotgun?20:26;
     spawnProjectile({x:b.x+x*0.8,y:b.y+y*0.8,vx:x*speed,vy:y*speed,
-      w:shotgun?0.18:0.22,h:shotgun?0.18:0.1,damage:shotgun?4:2,owner:'boss'});
+      w:shotgun?0.18:0.22,h:shotgun?0.18:0.1,damage:shotgun?4:2,owner:'boss',_source:b});
   }
 }
 
 function updateBoss() {
   const b=state.boss,p=state.player;
   if (!b.active || !b.alive || b.dead) return;
-  if (b.hp<=210){ b.charge_t += DT; while (b.charge_t>=3.8){b.charge_t-=3.8; b.charge_pending=true;} }
-  b.phase_t -= DT;
+  if(b.hp<=210){
+    b.charge_frames=(b.charge_frames??Math.round(b.charge_t/DT))+1;
+    while(b.charge_frames>=228){b.charge_frames-=228;b.charge_pending=true;}
+    b.charge_t=b.charge_frames*DT;
+  }
+  b.phase_t=fixedCountdown(b.phase_t);
   b.shoot_cd -= DT;
   if (b.phase!=='rifle' && b.phase!=='shotgun') b.shoot_cd=Math.max(0,b.shoot_cd);
   if (b.phase==='rifle') {
@@ -502,7 +597,7 @@ function updateProjectiles() {
     if (pr.owner==='player') {
       const ts = [...state.enemies.filter(e=>e.alive), ...(state.boss.active&&state.boss.alive&&!state.boss.dead?[state.boss]:[])].filter(t=>overlap(aabb(pr),aabb(t)));
       if (ts.length){
-        ts.sort((a,b)=>Math.hypot(a.x-pr.x,a.y-pr.y)-Math.hypot(b.x-pr.x,b.y-pr.y)||a.id.localeCompare(b.id));
+        ts.sort((a,b)=>Math.hypot(a.x-pr.x,a.y-pr.y)-Math.hypot(b.x-pr.x,b.y-pr.y)||idCompare(a.id,b.id));
         const t=ts[0]; state.hits.push({src:'p_proj',id:t.id||'BOSS',damage:pr.damage}); pr.destroyed=true; continue;
       }
     } else {
@@ -537,6 +632,7 @@ function resolveDamage() {
     }
   }
   if (maxP>0 && p.iframe<=0) { p.hp -= maxP; p.iframe=0.45; }
+  for(const e of state.enemies)if(e.alive && e.hp<=0)e.dead=true;
   const b=state.boss;
   if (b.active && b.alive && !b.dead && b.hp<=0) {
     b.dead=true; b.death_t=0.8; b.death_new=true;
@@ -544,7 +640,7 @@ function resolveDamage() {
 }
 
 function cleanup() {
-  state.projectiles = state.projectiles.filter(p=>!p.destroyed);
+  state.projectiles = state.pending_respawn?[]:state.projectiles.filter(p=>!p.destroyed);
   for (const e of state.enemies) if (e.alive && e.hp<=0) e.alive=false;
   const b=state.boss;
   if (b.dead) {
@@ -561,10 +657,9 @@ function cleanup() {
   }
   const g=state.grapple;
   if (g.local && (!g.target.alive || g.target.dead || g.target.hp<=0)) endGrapple();
-  else if (g.local && !g.end) {
-    // Melee knockback occurs during damage resolution, after head updates.
+  else if(g.local && !g.end) {
     refreshGrappleAnchor();
-    if (g.mode!=='stuck' && Math.hypot(g.anchor.x-state.player.x,g.anchor.y-state.player.y)<=0.8+EPS) endGrapple();
+    if(g.mode!=='stuck' && Math.hypot(g.anchor.x-state.player.x,g.anchor.y-state.player.y)<=0.8+EPS)endGrapple();
   }
   if (g.end) state.grapple=emptyGrapple();
   state.hits = [];
@@ -572,10 +667,14 @@ function cleanup() {
 
 function postChecks() {
   const p=state.player;
+  const checkpoint=state.rects.find(r=>r.type==='Checkpoint'&&overlap(aabb(p),aabb(r)));
+  if(checkpoint && state.checkpoint_inside!==checkpoint.id)state.hint={text:'检查点',t:0.8};
+  state.checkpoint_inside=checkpoint?checkpoint.id:'';
   const trig = state.rects.find(r=>r.type==='Trigger'&&r.kind==='BossTrigger');
   if (trig && overlap(aabb(p),aabb(trig)) && !state.boss.active) {
     const db=state.rects.find(r=>r.id==='DoorBoss'); if (db) db.locked=true;
     state.boss.active=true; state.boss_mode=true;
+    state.cam.x=clamp(state.cam.x,286,314);state.cam.y=clamp(state.cam.y,-21,-9);
   }
   const aliveNormals = state.enemies.some(e=>e.alive);
   if (!aliveNormals && !state.boss.alive) {
@@ -583,18 +682,35 @@ function postChecks() {
   }
   const goal=state.rects.find(r=>r.type==='Trigger'&&r.kind==='Goal');
   const ex=state.rects.find(r=>r.id==='DoorExit');
-  if (goal && ex && !ex.locked && overlap(aabb(p),aabb(goal))) { state.win_aim=playerAimDir();state.game_state='WIN'; state.hint={text:'通关',t:99999}; }
+  if (!state.pending_respawn && goal && ex && !ex.locked && overlap(aabb(p),aabb(goal))) { state.win_aim=playerAimDir();state.game_state='WIN'; state.hint={text:'通关',t:99999}; }
 
-  if (p.hp<=0 || p.x<-5||p.x>365||p.y>20||p.y<-40) respawn();
-  if (p.respawn_lock>0) p.respawn_lock--;
 }
 
 function respawn() {
   state.grapple=emptyGrapple();
-  const cp = state.rects.filter(r=>r.type==='Checkpoint').sort((a,b)=>Math.hypot(state.player.x-a.x,state.player.y-a.y)-Math.hypot(state.player.x-b.x,state.player.y-b.y))[0] || {respawn_x:level.player_spawn.x,respawn_y:level.player_spawn.y,respawn_facing:level.player_spawn.facing};
-  Object.assign(state.player,{x:cp.respawn_x,y:cp.respawn_y,vx:0,vy:0,hp:100,st:100,ammo:60,dash_used:false,dash:null,iframe:0,ignore_oneway_id:'',ignore_timer:0,jump_ascend:false,slide:null,crouch:false,facing:cp.respawn_facing,respawn_lock:1});
-  state.projectiles=[];
-  if (state.boss_mode){state.boss_mode=false; const db=state.rects.find(r=>r.id==='DoorBoss'); if (db) db.locked=false; state.boss.active=false; state.boss.phase='rifle'; state.boss.phase_t=2; state.boss.charge_pending=false; state.boss.charge_t=0;}
+  const cp=state.rects.filter(r=>r.type==='Checkpoint').sort((a,b)=>Math.hypot(state.player.x-a.x,state.player.y-a.y)-Math.hypot(state.player.x-b.x,state.player.y-b.y))[0];
+  const fallback=state.rects.find(r=>r.id==='CP0');
+  const p=state.player;
+  Object.assign(p,{vx:0,vy:0,w:1,h:2,hp:100,st:100,ammo:60,dash_used:false,dash:null,
+    grounded:false,standing_oneway_id:'',iframe:0,ignore_oneway_id:'',ignore_timer:0,
+    jump_ascend:false,jump_t:0,slide:null,crouch:false,melee:null,respawn_lock:1});
+  function place(point) {
+    p.x=point?.respawn_x??level.player_spawn.x;p.y=point?.respawn_y??level.player_spawn.y;
+    p.facing=point?.respawn_facing??level.player_spawn.facing;
+    return separateTerrain(p,8);
+  }
+  if(state.boss_mode) {
+    state.boss_mode=false;
+    const db=state.rects.find(r=>r.id==='DoorBoss');if(db)db.locked=false;
+    Object.assign(state.boss,{active:false,phase:'rifle',phase_t:2,charge_pending:false,charge_t:0,charge_frames:0,
+      charge:null,charge_next:null,warning_t:0,shot_count:0,shoot_cd:0,vx:0,vy:0});
+  }
+  if(!place(cp) && !place(fallback)) {p.x=level.player_spawn.x;p.y=level.player_spawn.y;p.facing=level.player_spawn.facing;}
+  p.vx=0;p.vy=0;
+  // In normal ticks all projectiles were already removed by cleanup.
+  if(state.projectiles.length) {state.pending_respawn=true;cleanup();}
+  state.pending_respawn=false;state.p_fire_cd=0;state.hint={text:'',t:0};state.checkpoint_inside='';
+  state.cam.x=clamp(state.cam.x,16,344);state.cam.y=clamp(state.cam.y,-21,1);
 }
 
 function updateCamera() {
@@ -616,15 +732,16 @@ function render() {
   const toScreen=(x,y)=>({x:(x-(state.cam.x-VIEW_HW))*PX_PER_CM,y:(state.cam.y+VIEW_HH-y)*PX_PER_CM});
   const drawRect=(o,c)=>{const s=toScreen(o.x,o.y);ctx.fillStyle=c;ctx.strokeStyle='#000';ctx.lineWidth=2;ctx.fillRect(s.x-o.w*PX_PER_CM/2,s.y-o.h*PX_PER_CM/2,o.w*PX_PER_CM,o.h*PX_PER_CM);ctx.strokeRect(s.x-o.w*PX_PER_CM/2,s.y-o.h*PX_PER_CM/2,o.w*PX_PER_CM,o.h*PX_PER_CM);};
   for (const r of state.rects) {
+    if(!['Solid','Wall','OneWay','Door'].includes(r.type))continue;
     if (r.type==='Door'&&!r.locked) continue;
     drawRect(r,r.type==='OneWay'?'rgba(120,200,120,1)':r.type==='Door'?'rgba(200,140,80,1)':'rgba(120,120,120,1)');
   }
-  for (const e of state.enemies.filter(e=>e.alive)) drawRect(e,e.type==='melee_basic'?'rgba(255,120,120,.86)':e.type==='ranged_rifle'?'rgba(255,170,80,.86)':'rgba(180,120,255,.86)');
+  for (const e of state.enemies.filter(e=>e.alive)) drawRect(e,e.type==='melee_basic'?'rgba(255,120,120,0.8627450980392157)':e.type==='ranged_rifle'?'rgba(255,170,80,0.8627450980392157)':'rgba(180,120,255,0.8627450980392157)');
   const b=state.boss;
   const bossVisible=b.phase!=='warn' || Math.floor((b.warning_t+0.15)/0.25)%2===0;
-  if (b.active && b.alive && !b.dead && bossVisible) drawRect(b,'rgba(255,200,80,.86)');
+  if (b.active && b.alive && !b.dead && bossVisible) drawRect(b,'rgba(255,200,80,0.8627450980392157)');
   for (const p of state.projectiles) drawRect(p,p.owner==='player'?'rgba(235,235,235,1)':(p.w<0.2?'rgba(220,180,255,1)':'rgba(255,240,160,1)'));
-  drawRect(state.player,'rgba(80,180,255,.86)');
+  drawRect(state.player,'rgba(80,180,255,0.8627450980392157)');
   const g=state.grapple;
   if (g.head && !g.end) {
     const from=toScreen(state.player.x,state.player.y),to=toScreen(g.head.x,g.head.y);
@@ -632,14 +749,18 @@ function render() {
     ctx.beginPath();ctx.moveTo(from.x,from.y);ctx.lineTo(to.x,to.y);ctx.stroke();
     drawRect(g.head,'rgba(160,160,160,1)');
   }
+  ctx.font='20px sans-serif';
   for (const enemy of state.enemies) {
     if (!enemy.alive || enemy.exclaim_t<=0) continue;
     const pos=toScreen(enemy.x,enemy.y+enemy.h/2);
-    ctx.fillStyle='white';ctx.fillText('!',pos.x,pos.y-12);
+    ctx.fillStyle='white';ctx.fillText('!',Math.round(pos.x),Math.round(pos.y-12));
   }
   const aim=playerAimDir();
   const s=toScreen(state.player.x,state.player.y), e=toScreen(state.player.x+aim.x*2,state.player.y+aim.y*2);
   ctx.strokeStyle='white';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(s.x,s.y);ctx.lineTo(e.x,e.y);ctx.stroke();
+  const fx=Math.round(s.x+state.player.facing*(state.player.w*PX_PER_CM/2+4)),fy=Math.round(s.y);
+  ctx.fillStyle='rgba(80,180,255,0.8627450980392157)';ctx.strokeStyle='#000';ctx.lineWidth=2;
+  ctx.beginPath();ctx.moveTo(fx+state.player.facing*4,fy);ctx.lineTo(fx-state.player.facing*4,fy-4);ctx.lineTo(fx-state.player.facing*4,fy+4);ctx.closePath();ctx.fill();ctx.stroke();
 
   ctx.fillStyle='white'; ctx.font='20px sans-serif';
   ctx.fillText(`HP ${Math.round(state.player.hp)} ST ${Math.round(state.player.st)} AMMO ${state.player.ammo}`, 24, 32);
@@ -651,7 +772,7 @@ let acc=0,last=performance.now();
 function loop(now){
   if (state.game_state==='RUN') {
     acc += Math.min(0.25,(now-last)/1000); last=now;
-    while (acc>=DT) { updateLogic(); acc-=DT; }
+    while (acc>=DT && state.game_state==='RUN') { updateLogic(); acc-=DT; }
   } else last=now;
   render();
   requestAnimationFrame(loop);

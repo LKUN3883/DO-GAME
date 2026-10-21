@@ -71,7 +71,7 @@ async function scenario(name,fixture,body){
 
 (async()=>{
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
-  browser=await chromium.launch({headless:true});
+  browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||undefined,args:['--no-sandbox','--disable-dev-shm-usage']});
   console.log('Chromium '+browser.version());
   await scenario('movement-release',null,async({page,read,frames})=>{
     const start=await read();assert.ok(start.player.grounded);

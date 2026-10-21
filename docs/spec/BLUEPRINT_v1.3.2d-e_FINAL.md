@@ -504,7 +504,39 @@ Checkpoint：{id,type,x,y,w,h,respawn_x,respawn_y,respawn_facing}
 Solid / OneWay：h=1.000
 Wall / Door：w=1.000
 22.5 训练关 JSON（唯一权威｜必须与仓库文件字面一致）
-（此处为上一条消息中的完整 JSON 原文；保持字面一致。为避免重复过长，你可直接复制上一条中 22.5 的 JSON 段落粘贴到这里；若你要求我再次完整输出，我会原样再贴一次。）
+```json
+{
+  "level_id": "train_v1",
+  "units": "cm",
+  "world_bounds": { "min_x": -10, "max_x": 370, "min_y": -50, "max_y": 30 },
+  "player_spawn": { "x": 6, "y": -21, "facing": 1 },
+  "rects": [
+    { "id": "GroundMain", "type": "Solid", "x": 180, "y": -25.5, "w": 360, "h": 1 },
+    { "id": "WallL", "type": "Wall", "x": -4.5, "y": -10, "w": 1, "h": 40 },
+    { "id": "WallR", "type": "Wall", "x": 364.5, "y": -10, "w": 1, "h": 40 },
+    { "id": "OneA", "type": "OneWay", "x": 40, "y": -14.5, "w": 24, "h": 1 },
+    { "id": "OneB", "type": "OneWay", "x": 92, "y": -10.5, "w": 24, "h": 1 },
+    { "id": "OneC", "type": "OneWay", "x": 160, "y": -7.5, "w": 26, "h": 1 },
+    { "id": "CP0", "type": "Checkpoint", "x": 8, "y": -21, "w": 2, "h": 2, "respawn_x": 6, "respawn_y": -21, "respawn_facing": 1 },
+    { "id": "CP1", "type": "Checkpoint", "x": 140, "y": -6, "w": 2, "h": 2, "respawn_x": 138, "respawn_y": -6, "respawn_facing": 1 },
+    { "id": "TR_BOSS", "type": "Trigger", "kind": "BossTrigger", "x": 280, "y": -21, "w": 8, "h": 6 },
+    { "id": "DoorBoss", "type": "Door", "x": 268, "y": -19, "w": 1, "h": 12, "locked_initially": false },
+    { "id": "DoorExit", "type": "Door", "x": 352, "y": -19, "w": 1, "h": 12, "locked_initially": true },
+    { "id": "GOAL", "type": "Trigger", "kind": "Goal", "x": 358, "y": -21, "w": 4, "h": 4 }
+  ],
+  "enemies": [
+    { "id": "E1", "type": "melee_basic", "x": 30, "y": -20.2, "w": 1, "h": 1.6, "hp": 110 },
+    { "id": "E2", "type": "melee_basic", "x": 55, "y": -13.2, "w": 1, "h": 1.6, "hp": 110 },
+    { "id": "E3", "type": "ranged_rifle", "x": 82, "y": -9.9, "w": 1.2, "h": 1.2, "hp": 95 },
+    { "id": "E4", "type": "ranged_rifle", "x": 112, "y": -20.4, "w": 1.2, "h": 1.2, "hp": 95 },
+    { "id": "E5", "type": "ranged_shotgun", "x": 150, "y": -6.9, "w": 1.2, "h": 1.2, "hp": 105 },
+    { "id": "E6", "type": "ranged_shotgun", "x": 176, "y": -20.4, "w": 1.2, "h": 1.2, "hp": 105 },
+    { "id": "E7", "type": "melee_basic", "x": 208, "y": -20.2, "w": 1, "h": 1.6, "hp": 110 },
+    { "id": "E8", "type": "ranged_rifle", "x": 240, "y": -20.4, "w": 1.2, "h": 1.2, "hp": 95 }
+  ],
+  "boss": { "id": "BOSS", "type": "boss_v1", "x": 300, "y": -20.2, "w": 2.6, "h": 2.6 }
+}
+```
 23.	关卡交互规则、死亡与重生（闭合“死亡对世界状态 / 重生重叠 / 输入窗口”）
 23.1 启动初始化（LOCKED）
 载入 train_v1 后同帧初始化：
@@ -820,3 +852,14 @@ identical results across runs.
 
 End of Implementation Spec & Clarifications.
 
+
+## 本轮工程勘误（不改变玩法数值）
+
+- 地形运动解算区分“接触”和“实际穿透”：4.3的闭区间 overlap 继续用于命中、投射物出生和感知；角色地形分离/击退回退/站起空间检测使用实际穿透，完成8.4的eps分离后不再把脚下接触当侧墙。X解算仅选垂直穿透大于2eps的阻挡，保留此前修复，避免浮点接触反复解算。
+- 蹲滑改变高度时保持底边位置不变，站起按同一脚底位置构造站立AABB检查空间；顶头时保持低姿态且不可匍匐移动。这是对12章身高切换中心点的工程闭合，站/蹲尺寸、滑速和持续时间不变。
+- 每帧敌人/Boss更新中产生射击意图，stage9按玩家→敌→Boss顺序实际生成；新投射物在同帧stage10移动和命中。输入锁于重生后的下一完整逻辑帧结束时解除；重生在ST/UI刷新后最后执行。
+- “最近Checkpoint”按23.5原规则，不额外要求激活。检查点Hint在进入其AABB时显示规定的0.8s。
+
+- 固定持续时长按60Hz整逻辑帧倒计时表达，秒值仍为JS number；避免反复减dt的浮点残差把0.2/0.45/0.5/2.0秒状态多留一帧。射击/近战频率仍按3.4原RateTimer算法。
+
+- 角色彼此挤出使用2eps间隙，退出4.3的闭区间接触；地形分离仍使用8.4的eps与实际穿透检查。这与独立重生/角色碰撞修复一致，不改变角色尺寸或速度。
