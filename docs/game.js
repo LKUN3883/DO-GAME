@@ -359,14 +359,36 @@ function spawnProjectile(pr) {
   return true;
 }
 
+function sightBlocked(from,to) {
+  for (const r of blockers(false)) {
+    const a=aabb(r);
+    let low=0,high=1,miss=false;
+    for (const axis of ['x','y']) {
+      const delta=to[axis]-from[axis];
+      const lower=a['min_'+axis]-EPS,upper=a['max_'+axis]+EPS;
+      if (Math.abs(delta)<=EPS*1e-3) {
+        if (from[axis]<lower || from[axis]>upper) {miss=true;break;}
+      } else {
+        let t0=(lower-from[axis])/delta,t1=(upper-from[axis])/delta;
+        if (t0>t1) [t0,t1]=[t1,t0];
+        low=Math.max(low,t0);high=Math.min(high,t1);
+        if (low>high) {miss=true;break;}
+      }
+    }
+    if (!miss) return true;
+  }
+  return false;
+}
+
 function updateEnemies() {
   const p=state.player;
   const vis={x:state.cam.x,y:state.cam.y,w:32,h:18};
   for (const e of state.enemies.filter(e=>e.alive)) {
     e.vy=Math.max(-15,e.vy-180*DT);
     const inCam = overlap(aabb(e),aabb(vis));
-    if (!e.discovered && inCam) e.exclaim_t=0.5;
-    e.discovered = inCam;
+    const discovered=inCam && (e.type==='melee_basic' || !sightBlocked(e,p));
+    if (!e.discovered && discovered) e.exclaim_t=0.5;
+    e.discovered = discovered;
     e.exclaim_t=Math.max(0,e.exclaim_t-DT);
     if (e.type==='melee_basic') {
       const dir = sign(p.x-e.x)||1;
