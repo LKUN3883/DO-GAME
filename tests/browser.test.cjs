@@ -48,7 +48,7 @@ test('browser: real A/D key events stop on release, A+D cancel, blur clears inpu
 test('browser: ordinary jump, hold, second-press air dash and landing',async t=>{
   const {p,run,advance}=await game(t);const y=await run('state.player.y');
   await p.keyboard.down('Space');await advance(200);assert.ok(await run('state.player.y')>y+6);assert.equal(await run('state.player.dash_used'),false);
-  await p.keyboard.up('Space');await advance(20);
+  await p.keyboard.up('Space');await oneLogicTick(p);
   await run('state.cam.x=state.player.x;state.cam.y=state.player.y');await p.mouse.move(1100,360);
   const x=await run('state.player.x'),st=await run('state.player.st');await p.keyboard.down('Space');await advance(140);
   assert.ok(Math.abs(await run('state.player.x')-x-6)<0.15);assert.ok(await run('state.player.st')<st-27);assert.equal(await run('state.player.dash'),null);
@@ -73,7 +73,7 @@ test('browser: OneWay ascent/landing/drop and diagonal dash wall contact',async 
   await advance(300);assert.ok(await run('state.player.y')<-14);
   await p.keyboard.up('s');await p.keyboard.up('Space');
   await run("Object.assign(state.player,{x:6,y:-18,grounded:false,dash_used:true,dash:{dir:{x:Math.SQRT1_2,y:Math.SQRT1_2},left:6}});state.rects.push({id:'TEST_WALL',type:'Wall',x:7.2,y:-15,w:1,h:20})");
-  await advance(20);assert.equal(await run('state.player.dash'),null);assert.equal(await run('state.player.vx'),0);assert.ok(await run('state.player.vy')<=0 && await run('state.player.vy')>=-3,'dash ended; at most one following gravity tick may have run');
+  await oneLogicTick(p);assert.equal(await run('state.player.dash'),null);assert.equal(await run('state.player.vx'),0);assert.ok(await run('state.player.vy')<=0 && await run('state.player.vy')>=-3,'dash ended; at most one following gravity tick may have run');
 });
 
 test('browser: firing into blocked spawn refunds ammo; releasing outside canvas stops shooting',async t=>{
@@ -105,7 +105,7 @@ test('browser: right mouse launches and pulls grapple, then release cancels it',
   await run("state.enemies=[];state.rects.push({id:'GRAPPLE_WALL',type:'Wall',x:14,y:-21,w:1,h:8});state.cam.x=state.player.x;state.cam.y=state.player.y");
   await p.mouse.move(1100,360);const start=await run('state.player.x');
   await p.mouse.down({button:'right'});await advance(900);assert.ok(await run('state.player.x')>start+1);
-  await p.mouse.up({button:'right'});await advance(30);assert.equal(await run('state.grapple.mode'),'none');
+  await p.mouse.up({button:'right'});await oneLogicTick(p);assert.equal(await run('state.grapple.mode'),'none',await run('JSON.stringify({ticks:window.__logic_ticks,raw:keyRaw.get(\"Mouse2\"),input:input.RMB})'));
 });
 
 test('browser: Boss repeats rifle, pause, four-volley shotgun and pause cycle',async t=>{
@@ -118,9 +118,9 @@ test('browser: Boss repeats rifle, pause, four-volley shotgun and pause cycle',a
 });
 
 test('browser: second-phase warning flashes, then charge deals 18 once and resumes shotgun',async t=>{
-  const {run,advance}=await game(t);
+  const {p,run,advance}=await game(t);
   await run("state.enemies=[];Object.assign(state.player,{x:302,y:-23.999,hp:100,iframe:0});Object.assign(state.boss,{active:true,x:300,y:-23.699,hp:210,phase:'idleA',phase_t:1,charge_pending:true});state.boss_mode=true;state.cam={x:300,y:-21}");
-  await advance(20);assert.equal(await run('state.boss.phase'),'warn');
+  await oneLogicTick(p);assert.equal(await run('state.boss.phase'),'warn');
   const color=await run("state.boss.warning_t=0;render();Array.from(ctx.getImageData(640,468,1,1).data).join(',')");
   const hidden=await run("state.boss.warning_t=0.11;render();Array.from(ctx.getImageData(640,468,1,1).data).join(',')");
   assert.notEqual(color,hidden,'Boss body must actually blink on the Canvas');
@@ -131,7 +131,7 @@ test('browser: second-phase warning flashes, then charge deals 18 once and resum
 test('browser: lethal melee stops Boss, retains death camera and door for 0.8s, then unlocks exit',async t=>{
   const {p,run,advance}=await game(t);
   await run("state.enemies=[];Object.assign(state.player,{x:298,y:-23.999,vx:0,vy:0});Object.assign(state.boss,{active:true,x:300,y:-23.699,hp:80,phase:'idleA',phase_t:100});state.boss_mode=true;state.cam={x:298,y:-21};state.rects.find(r=>r.id==='DoorBoss').locked=true");
-  await p.mouse.move(1100,360);await p.keyboard.down('f');await advance(20);await p.keyboard.up('f');
+  await p.mouse.move(1100,360);await p.keyboard.down('f');await oneLogicTick(p);await p.keyboard.up('f');
   assert.equal(await run('state.boss.dead'),true);assert.equal(await run('state.boss_mode'),false);
   await run('state.player.x=280;state.cam.x=286');await advance(740);
   assert.equal(await run('state.boss.alive'),true);assert.equal(await run('state.cam.x'),286);
@@ -150,7 +150,7 @@ test('browser: lethal melee stops Boss, retains death camera and door for 0.8s, 
 
 async function oneLogicTick(p) {
  const before=await p.evaluate(()=>window.__logic_ticks||0);
- for(let i=0;i<25;i++){await p.clock.runFor(1);if(await p.evaluate(()=>window.__logic_ticks||0)>before)return;}
+ for(let i=0;i<100;i++){await p.clock.runFor(1);if(await p.evaluate(()=>window.__logic_ticks||0)>before)return;}
  throw new Error('RAF did not advance a logic tick');
 }
 
@@ -169,7 +169,7 @@ test('browser acceptance: crouch/roof/slide preserve geometry and prevent crawli
  await p.keyboard.down('s');await advance(50);assert.equal(await run('state.player.h'),1);assert.ok(Math.abs(await run('state.player.y-state.player.h/2')-foot)<1e-8);
  await run("state.rects.push({id:'CEILING',type:'Solid',x:6,y:-23.4,w:4,h:0.2})");await p.keyboard.up('s');await p.keyboard.down('d');await advance(150);
  assert.equal(await run('state.player.h'),1);assert.equal(await run('state.player.x'),6);assert.equal(await run('blockers().some(r=>penetrates(aabb(state.player),aabb(r)))'),false);
- await run("state.rects=state.rects.filter(r=>r.id!=='CEILING')");await p.keyboard.up('d');await advance(20);assert.equal(await run('state.player.h'),2);
+ await run("state.rects=state.rects.filter(r=>r.id!=='CEILING')");await p.keyboard.up('d');await oneLogicTick(p);assert.equal(await run('state.player.h'),2);
  await p.keyboard.down('d');await p.keyboard.down('s');await oneLogicTick(p);assert.equal(await run('state.player.vx'),10);
  await run("state.rects.push({id:'SLIDE_STOP',type:'Wall',x:state.player.x+1.1,y:-23,w:1,h:6})");await advance(100);assert.equal(await run('state.player.slide'),null);assert.equal(await run('state.player.vx'),0);
 });
@@ -189,5 +189,5 @@ test('browser joint acceptance: enemy body cancels grapple advance, enters STUCK
  assert.equal(await run('state.grapple.mode'),'stuck');const x=await run('state.player.x');
  await p.keyboard.down('d');await p.keyboard.down('Space');await advance(300);
  assert.equal(await run('state.player.x'),x);assert.equal(await run('state.player.vx'),0);assert.equal(await run('state.player.vy'),0);
- await p.mouse.move(800,770);await p.mouse.up({button:'right'});await advance(30);assert.equal(await run('state.grapple.mode'),'none');
+ await p.mouse.move(800,770);await p.mouse.up({button:'right'});await oneLogicTick(p);assert.equal(await run('state.grapple.mode'),'none',await run('JSON.stringify({ticks:window.__logic_ticks,raw:keyRaw.get(\"Mouse2\"),input:input.RMB})'));
 });
