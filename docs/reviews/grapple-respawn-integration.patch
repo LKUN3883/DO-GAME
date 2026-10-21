@@ -1,0 +1,49 @@
+--- a/docs/game.js
++++ b/docs/game.js
+@@ -160,15 +160,16 @@
+     g.head.x=g.anchor.x; g.head.y=g.anchor.y;
+   }
+ }
+-function moveGrapplePlayer(input_x) {
++function moveGrapplePlayer(input_x, resolveBodies) {
+   const g=state.grapple,p=state.player;
+   refreshGrappleAnchor();
+-  if (g.mode==='stuck') { p.vx=0; p.vy=0; return; }
+-  if (Math.hypot(g.anchor.x-p.x,g.anchor.y-p.y)<=0.8+EPS) { endGrapple(); return; }
++  if (g.mode==='stuck') { p.vx=0; p.vy=0; if (resolveBodies) resolveBodies(); return; }
++  if (Math.hypot(g.anchor.x-p.x,g.anchor.y-p.y)<=0.8+EPS) { endGrapple(); if (resolveBodies) resolveBodies(); return; }
+   const prev={x:p.x,y:p.y};
+   const dir=norm({x:g.anchor.x-prev.x,y:g.anchor.y-prev.y});
+   p.vx=dir.x*10+input_x*3; p.vy=dir.y*10;
+   resolveAxis(p,p.vx*DT,p.vy*DT);
++  if (resolveBodies) resolveBodies();
+   const advance=dot({x:p.x-prev.x,y:p.y-prev.y},dir);
+   g.stuck_frames=advance<=EPS ? g.stuck_frames+1 : 0;
+   if (g.stuck_frames>=3) { g.mode='stuck'; p.vx=0; p.vy=0; }
+@@ -325,7 +326,7 @@
+   if (input.RMB.just_pressed && state.grapple.mode==='none') spawnGrapple(aim);
+ 
+   if (pulling) {
+-    moveGrapplePlayer(input_x);
++    moveGrapplePlayer(input_x,separatePlayerBodies);
+     if (p.slide) {
+       p.slide.t+=DT;
+       if (p.slide.t>=0.9 || !p.grounded || p.vx===0) p.slide=null;
+@@ -389,7 +390,7 @@
+     }
+   } else state.p_fire_cd=Math.max(state.p_fire_cd,0);
+ 
+-  separatePlayerBodies();
++  if (!pulling) separatePlayerBodies();
+   updateCamera();
+   updateEnemies();
+   updateBoss();
+@@ -659,7 +660,7 @@
+     jump_t:0,jump_ascend:false,slide:null,crouch:false,melee:null,iframe:0,
+     ignore_oneway_id:'',ignore_timer:0,respawn_lock:1
+   });
+-  endGrapple();
++  state.grapple=emptyGrapple();
+   state.hint={text:'',t:0};
+   state.p_fire_cd=0;
+   if (state.boss_mode) {
