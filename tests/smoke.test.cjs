@@ -21,9 +21,11 @@ test('one melee swing damages enemy once and knocks it back',async()=>{
   g.tick(60);
   g.run("state.enemies = [{id:'E_TEST',type:'melee_basic',alive:true,x:state.player.x+2,y:state.player.y,w:1,h:1.6,hp:110,vx:0,vy:0,grounded:true,melee_cd:100,discovered:false}]; mx=1279;my=360;");
   const before=g.run('state.enemies[0].x');
-  g.key('KeyF',true);g.tick(1);g.key('KeyF',false);g.tick(10);
-  assert.equal(g.run('state.enemies[0].hp'),30);
-  assert.ok(g.run('state.enemies[0].x')>before+0.3,'knockback moves enemy');
+  g.key('KeyF',true);g.tick(1);
+  const pushed=g.run('state.enemies[0].x');
+  assert.ok(pushed>before+0.3,'knockback moves enemy at hit frame');
+  g.key('KeyF',false);g.tick(10);
+  assert.equal(g.run('state.enemies[0].hp'),30,'each swing may hit the enemy only once');
 });
 
 test('grapple flies and can pull player toward an obstacle',async()=>{
@@ -46,4 +48,24 @@ test('inactive boss does not appear as an attackable active boss',async()=>{
   assert.equal(g.run('state.boss.active'),true);
   g.run('render()');
   assert.ok(g.labels.some(x=>x.startsWith('BOSS HP')),'active boss bar must be visible');
+});
+
+test('ranged enemy cannot detect the player through a solid wall',async()=>{
+  const g=await game();
+  g.tick(60);
+  g.run("state.enemies=[{id:'E_TEST',type:'ranged_rifle',alive:true,x:12,y:state.player.y,w:1.2,h:1.2,hp:95,vx:0,vy:0,grounded:false,shoot_cd:0,discovered:false,exclaim_t:0}]; state.rects.push({id:'SIGHT_TEST_WALL',type:'Wall',x:9,y:-21,w:1,h:8});");
+  g.tick(1);
+  assert.equal(g.run('state.enemies[0].discovered'),false);
+  assert.equal(g.run('state.projectiles.filter(p=>p.owner==="enemy").length'),0);
+  g.run("state.rects=state.rects.filter(r=>r.id!=='SIGHT_TEST_WALL')");
+  g.tick(1);
+  assert.equal(g.run('state.enemies[0].discovered'),true);
+  assert.ok(g.run('state.enemies[0].exclaim_t')>0);
+});
+
+test('boss cannot be damaged before its trigger',async()=>{
+  const g=await game();
+  g.run("state.projectiles.push({owner:'player',x:300,y:-20,vx:0,vy:0,w:1,h:1,damage:9,spawn_seq:0,age:0,destroyed:false})");
+  g.tick(1);
+  assert.equal(g.run('state.boss.hp'),420);
 });

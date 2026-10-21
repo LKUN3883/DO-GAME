@@ -1,0 +1,22 @@
+name: Game smoke tests
+on:
+  push:
+    branches:
+      - repair/blueprint-bugs-pass1
+      - repair/grapple-ch14
+  pull_request:
+    branches:
+      - main
+      - repair/blueprint-bugs-pass1
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --check docs/game.js
+      - run: node --test tests/*.test.cjs

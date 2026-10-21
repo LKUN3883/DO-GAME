@@ -14,7 +14,7 @@ small isolated fixtures for exact geometry and timing assertions.
 
 ## Grapple / blueprint chapter 14
 
-29 targeted tests cover spawn size/aim/single-head gating, all four terrain
+32 targeted tests cover spawn size/aim/single-head gating, all four terrain
 spawn blockers, 0.05 cm backtracking through 0.90 cm, failure without resources
 or cooldown, final spawn origin, 28 cm/s flight, 40 cm range, target priorities,
 nearest-center/Unicode id selection, clamped and moving local anchors, 10 cm/s
@@ -31,18 +31,19 @@ so neither can resume after release. End effects happen immediately, with head
 and state cleared at cleanup. STUCK ignores proximity and disappearing terrain;
 only release or anchored-character death ends it (respawn also clears all state).
 
-## Baseline comparison (2026-10-21)
+## Validation status (2026-10-21)
 
-Starting point: `34f32508c3eb1f8dd1b04bbbc061ed6ff371d194`, the head of PR #2.
-Its original smoke suite had 1 pass and 3 failures. After this change it has
-2 passes and 2 failures: grounded A/D and the original grapple scenario pass.
-The unchanged failures are the missing ordinary-enemy melee knockback and
-missing active Boss health bar. These assertions remain enabled.
+Based on `9fdae307412054f3bf69d833d5f0c250b4276f79`, the refreshed head of
+PR #2. All six upstream smoke scenarios are retained, including their corrected
+hit-frame knockback assertion and the newer line-of-sight/inactive-Boss cases.
+The shared harness is extracted to `tests/helpers/game.cjs`; each tick calls
+`updateLogic()` once, matching production (camera is already updated inside it).
 
-Together with the 29 targeted tests, the full suite has 31 passes and 2 known
-failures. This is not full-game blueprint certification. Other PR #2 audit
-items (global frame ordering, player/body separation, collision rollback,
-enemy AI, respawn/checkpoints and unrelated UI) remain outside this repair.
+The full suite passes all 38 tests (32 targeted grapple tests + 6 upstream smoke
+tests). The GitHub Actions workflow now runs `tests/*.test.cjs` on both repair
+branches and PRs to main/the base repair branch, picking up the new tests. This is not full-game blueprint certification. Other
+PR #2 audit items (player/body separation, collision rollback, enemy edge AI,
+respawn/checkpoints and unrelated UI) remain outside this repair.
 
 No Chromium playtest was completed: Playwright is present in the editing
 environment, but its browser executable is unavailable. Browser input bubbling,

@@ -96,7 +96,7 @@ for (const target of ['Enemy','Boss']) {
   test(`14.9: ${target} anchor clamps to AABB, keeps local offset through motion`,async()=>{
     const g=await arena();
     g.run(`spawnGrapple({x:1,y:0});
-      const target={id:'BOSS',alive:true,dead:false,hp:100,x:11.6,y:0,w:0.2,h:1};
+      const target={id:'BOSS',active:true,alive:true,dead:false,hp:100,x:11.6,y:0,w:0.2,h:1};
       ${target==='Boss'?'state.boss=target':'state.enemies=[target]'};
       updateGrapple();`);
     near(g.run('state.grapple.anchor.x'),11.5);
@@ -213,16 +213,16 @@ for (const mode of ['fly','pull','stuck']) {
   });
 }
 
-for (const target of ['Enemy','Boss']) {
-  test(`14.12: anchored ${target} killed by same-tick shooting ends during cleanup`,async()=>{
+for (const target of ['Enemy','Boss']) for (const mode of ['pull','stuck']) {
+  test(`14.12: ${mode} anchored ${target} killed by same-tick shooting ends during cleanup`,async()=>{
     const g=await arena();
-    g.run(`const victim={id:'${target==='Boss'?'BOSS':'E'}',alive:true,dead:false,hp:9,x:12,y:0,w:1,h:1};
+    g.run(`const victim={id:'${target==='Boss'?'BOSS':'E'}',active:true,alive:true,dead:false,hp:9,x:12,y:0,w:1,h:1};
       ${target==='Boss'?'state.boss=victim':'state.enemies=[victim]'};
-      spawnGrapple({x:1,y:0});state.grapple.head.x=11.4;updateGrapple();
+      spawnGrapple({x:1,y:0});state.grapple.head.x=11.4;updateGrapple();state.grapple.mode='${mode}';
       spawnProjectile({x:11.5,y:0,vx:30,vy:0,w:0.25,h:0.1,damage:9,owner:'player'});
       updateProjectiles();resolveDamage();`);
     assert.equal(g.run('state.grapple.target.hp'),0);
-    assert.equal(g.run('state.grapple.mode'),'pull');
+    assert.equal(g.run('state.grapple.mode'),mode);
     g.run('cleanup()');assert.equal(g.run('state.grapple.mode'),'none');
   });
 }
@@ -242,4 +242,11 @@ test('determinism: identical inputs produce identical full state',async()=>{
     g.mouse(2,false);g.tick(10);return json(g,'state');
   }
   assert.deepEqual(await replay(),await replay());
+});
+
+// Preserve the latest PR #2 inactive-Boss protection for grapple targets too.
+test('inactive Boss is not a grapple target',async()=>{
+  const g=await arena();
+  g.run("state.boss={id:'BOSS',active:false,alive:true,dead:false,x:11.4,y:0,w:2.6,h:2.6,hp:420};spawnGrapple({x:1,y:0});updateGrapple()");
+  assert.equal(g.run('state.grapple.mode'),'fly');
 });

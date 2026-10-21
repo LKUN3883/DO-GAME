@@ -36,7 +36,7 @@ async function game() {
   vm.runInContext(fs.readFileSync(path.join(root,'game.js'),'utf8'),scope,{filename:'docs/game.js'});
   await new Promise(resolve => setImmediate(resolve));
   const run = (code) => vm.runInContext(code,scope);
-  const tick = (n=1) => {for(let k=0;k<n;k++) run('updateLogic(); updateCamera();');};
+  const tick = (n=1) => {for(let k=0;k<n;k++) run('updateLogic();');};
   const key = (name, down) => handlers[down?'keydown':'keyup']({code:name, preventDefault() {}});
   const mouse = (button,down) => handlers[down?'canvas:mousedown':'canvas:mouseup']({button});
   return {run,tick,key,mouse,labels,handlers};

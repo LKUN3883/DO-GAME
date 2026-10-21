@@ -178,7 +178,7 @@ function updateGrapple() {
   }
   const h=g.head;
   h.x+=h.vx*DT; h.y+=h.vy*DT;
-  const characters=[...state.enemies.filter(e=>e.alive),...(state.boss.alive&&!state.boss.dead?[state.boss]:[])];
+  const characters=[...state.enemies.filter(e=>e.alive),...(state.boss.active&&state.boss.alive&&!state.boss.dead?[state.boss]:[])];
   const groups=[characters,state.rects.filter(r=>r.type==='OneWay'),blockers(false)];
   for (const group of groups) {
     const hits=group.filter(t=>overlap(aabb(h),aabb(t)));
@@ -202,7 +202,7 @@ function resolveAxis(obj, dx, dy) {
   const prev = {x:obj.x,y:obj.y};
   obj.x += dx;
   for (let i=0;i<8;i++) {
-    const hits = blockers(false).filter(r=>penetrates(aabb(obj),aabb(r)));
+    const hits = blockers(false).filter(r=>Math.min(obj.y+obj.h/2,r.y+r.h/2)-Math.max(obj.y-obj.h/2,r.y-r.h/2)>EPS*2 && penetrates(aabb(obj),aabb(r)));
     if (!hits.length) break;
     const sorted = hits.sort((a,b)=>dx>0?((a.x-a.w/2)-(b.x-b.w/2)||a.id.localeCompare(b.id)):((b.x+b.w/2)-(a.x+a.w/2)||a.id.localeCompare(b.id)));
     const o = sorted[0];
@@ -306,10 +306,24 @@ function updateLogic() {
       for (const e of state.enemies.filter(e=>e.alive)) {
         if (p.melee.hit.has(e.id)) continue;
         const to={x:e.x-p.x,y:e.y-p.y};
-        if (len(to)<=3.2+EPS && dot(norm(to),aim)>=0.5) { state.hits.push({src:'p_melee',id:e.id,damage:80}); p.melee.hit.add(e.id); }
+        if (len(to)<=3.2+EPS && dot(norm(to),aim)>=0.5) {
+          state.hits.push({src:'p_melee',id:e.id,damage:80});
+          p.melee.hit.add(e.id);
+          const direction=len(to)<=EPS?{x:p.facing,y:0}:norm(to);
+          const original={x:e.x,y:e.y};
+          e.x+=direction.x*0.6; e.y+=direction.y*0.6;
+          if (blockers(false).some(r=>overlap(aabb(e),aabb(r)))) {
+            let clear=false;
+            for (let n=1;n<=12;n++) {
+              e.x-=direction.x*0.05; e.y-=direction.y*0.05;
+              if (!blockers(false).some(r=>overlap(aabb(e),aabb(r)))) { clear=true; break; }
+            }
+            if (!clear) {e.x=original.x;e.y=original.y;}
+          }
+        }
       }
       const b=state.boss;
-      if (b.alive && !b.dead) {
+      if (b.active && b.alive && !b.dead) {
         const to={x:b.x-p.x,y:b.y-p.y};
         if (!p.melee.hit.has('BOSS') && len(to)<=3.2+EPS && dot(norm(to),aim)>=0.5) { state.hits.push({src:'p_melee',id:'BOSS',damage:80}); p.melee.hit.add('BOSS'); }
       }
@@ -330,6 +344,7 @@ function updateLogic() {
     }
   } else state.p_fire_cd=Math.max(state.p_fire_cd,0);
 
+  updateCamera();
   updateEnemies();
   updateBoss();
   updateProjectiles();
@@ -360,13 +375,37 @@ function spawnProjectile(pr) {
   return true;
 }
 
+function sightBlocked(from,to) {
+  for (const r of blockers(false)) {
+    const a=aabb(r);
+    let low=0,high=1,miss=false;
+    for (const axis of ['x','y']) {
+      const delta=to[axis]-from[axis];
+      const lower=a['min_'+axis]-EPS,upper=a['max_'+axis]+EPS;
+      if (Math.abs(delta)<=EPS*1e-3) {
+        if (from[axis]<lower || from[axis]>upper) {miss=true;break;}
+      } else {
+        let t0=(lower-from[axis])/delta,t1=(upper-from[axis])/delta;
+        if (t0>t1) [t0,t1]=[t1,t0];
+        low=Math.max(low,t0);high=Math.min(high,t1);
+        if (low>high) {miss=true;break;}
+      }
+    }
+    if (!miss) return true;
+  }
+  return false;
+}
+
 function updateEnemies() {
   const p=state.player;
   const vis={x:state.cam.x,y:state.cam.y,w:32,h:18};
   for (const e of state.enemies.filter(e=>e.alive)) {
     e.vy=Math.max(-15,e.vy-180*DT);
     const inCam = overlap(aabb(e),aabb(vis));
-    e.discovered = inCam;
+    const discovered=inCam && (e.type==='melee_basic' || !sightBlocked(e,p));
+    if (!e.discovered && discovered) e.exclaim_t=0.5;
+    e.discovered = discovered;
+    e.exclaim_t=Math.max(0,e.exclaim_t-DT);
     if (e.type==='melee_basic') {
       const dir = sign(p.x-e.x)||1;
       e.vx = e.discovered ? dir*5 : 0;
@@ -398,7 +437,6 @@ function updateEnemies() {
 function updateBoss() {
   const b=state.boss,p=state.player;
   if (!b.active || !b.alive) return;
-  if (b.hp<=0&&!b.dead){ b.dead=true;b.death_t=0.8; state.boss_mode=false; }
   if (b.dead) return;
   if (b.hp<=210){ b.charge_t += DT; while (b.charge_t>=3.8){b.charge_t-=3.8; b.charge_pending=true;} }
   b.phase_t -= DT;
@@ -428,7 +466,7 @@ function updateProjectiles() {
     if (pr.destroyed) continue;
     pr.x += pr.vx*DT; pr.y += pr.vy*DT;
     if (pr.owner==='player') {
-      const ts = [...state.enemies.filter(e=>e.alive), ...(state.boss.alive&&!state.boss.dead?[state.boss]:[])].filter(t=>overlap(aabb(pr),aabb(t)));
+      const ts = [...state.enemies.filter(e=>e.alive), ...(state.boss.active&&state.boss.alive&&!state.boss.dead?[state.boss]:[])].filter(t=>overlap(aabb(pr),aabb(t)));
       if (ts.length){
         ts.sort((a,b)=>Math.hypot(a.x-pr.x,a.y-pr.y)-Math.hypot(b.x-pr.x,b.y-pr.y)||a.id.localeCompare(b.id));
         const t=ts[0]; state.hits.push({src:'p_proj',id:t.id||'BOSS',damage:pr.damage}); pr.destroyed=true; continue;
@@ -453,6 +491,10 @@ function resolveDamage() {
     }
   }
   if (maxP>0 && p.iframe<=0) { p.hp -= maxP; p.iframe=0.45; }
+  const b=state.boss;
+  if (b.active && b.alive && !b.dead && b.hp<=0) {
+    b.dead=true; b.death_t=0.8; state.boss_mode=false;
+  }
 }
 
 function cleanup() {
@@ -516,8 +558,9 @@ function render() {
     drawRect(r,r.type==='OneWay'?'rgba(120,200,120,1)':r.type==='Door'?'rgba(200,140,80,1)':'rgba(120,120,120,1)');
   }
   for (const e of state.enemies.filter(e=>e.alive)) drawRect(e,e.type==='melee_basic'?'rgba(255,120,120,.86)':e.type==='ranged_rifle'?'rgba(255,170,80,.86)':'rgba(180,120,255,.86)');
-  if (state.boss.alive) drawRect(state.boss,'rgba(255,200,80,.86)');
+  if (state.boss.active && state.boss.alive) drawRect(state.boss,'rgba(255,200,80,.86)');
   for (const p of state.projectiles) drawRect(p,p.owner==='player'?'rgba(235,235,235,1)':(p.w<0.2?'rgba(220,180,255,1)':'rgba(255,240,160,1)'));
+  drawRect(state.player,'rgba(80,180,255,.86)');
   const g=state.grapple;
   if (g.head && !g.end) {
     const from=toScreen(state.player.x,state.player.y),to=toScreen(g.head.x,g.head.y);
@@ -525,7 +568,11 @@ function render() {
     ctx.beginPath();ctx.moveTo(from.x,from.y);ctx.lineTo(to.x,to.y);ctx.stroke();
     drawRect(g.head,'rgba(160,160,160,1)');
   }
-  drawRect(state.player,'rgba(80,180,255,.86)');
+  for (const enemy of state.enemies) {
+    if (!enemy.alive || enemy.exclaim_t<=0) continue;
+    const pos=toScreen(enemy.x,enemy.y+enemy.h/2);
+    ctx.fillStyle='white';ctx.fillText('!',pos.x,pos.y-12);
+  }
   const aim=playerAimDir();
   const s=toScreen(state.player.x,state.player.y), e=toScreen(state.player.x+aim.x*2,state.player.y+aim.y*2);
   ctx.strokeStyle='white';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(s.x,s.y);ctx.lineTo(e.x,e.y);ctx.stroke();
@@ -533,13 +580,14 @@ function render() {
   ctx.fillStyle='white'; ctx.font='20px sans-serif';
   ctx.fillText(`HP ${Math.round(state.player.hp)} ST ${Math.round(state.player.st)} AMMO ${state.player.ammo}`, 24, 32);
   if (state.hint.text && state.hint.t>0) ctx.fillText(state.hint.text, 24, 64);
+  if (state.boss.active && state.boss.alive) ctx.fillText(`BOSS HP ${Math.max(0,Math.round(state.boss.hp))}/420`,24,96);
 }
 
 let acc=0,last=performance.now();
 function loop(now){
   if (state.game_state==='RUN') {
     acc += Math.min(0.25,(now-last)/1000); last=now;
-    while (acc>=DT) { updateLogic(); updateCamera(); acc-=DT; }
+    while (acc>=DT) { updateLogic(); acc-=DT; }
   } else last=now;
   render();
   requestAnimationFrame(loop);
