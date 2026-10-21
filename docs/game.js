@@ -268,7 +268,7 @@ function updateLogic() {
         }
       }
       const b=state.boss;
-      if (b.alive && !b.dead) {
+      if (b.active && b.alive && !b.dead) {
         const to={x:b.x-p.x,y:b.y-p.y};
         if (!p.melee.hit.has('BOSS') && len(to)<=3.2+EPS && dot(norm(to),aim)>=0.5) { state.hits.push({src:'p_melee',id:'BOSS',damage:80}); p.melee.hit.add('BOSS'); }
       }
@@ -289,6 +289,7 @@ function updateLogic() {
     }
   } else state.p_fire_cd=Math.max(state.p_fire_cd,0);
 
+  updateCamera();
   updateEnemies();
   updateBoss();
   updateGrapple();
@@ -398,7 +399,6 @@ function updateEnemies() {
 function updateBoss() {
   const b=state.boss,p=state.player;
   if (!b.active || !b.alive) return;
-  if (b.hp<=0&&!b.dead){ b.dead=true;b.death_t=0.8; state.boss_mode=false; }
   if (b.dead) return;
   if (b.hp<=210){ b.charge_t += DT; while (b.charge_t>=3.8){b.charge_t-=3.8; b.charge_pending=true;} }
   b.phase_t -= DT;
@@ -428,7 +428,7 @@ function updateProjectiles() {
     if (pr.destroyed) continue;
     pr.x += pr.vx*DT; pr.y += pr.vy*DT;
     if (pr.owner==='player') {
-      const ts = [...state.enemies.filter(e=>e.alive), ...(state.boss.alive&&!state.boss.dead?[state.boss]:[])].filter(t=>overlap(aabb(pr),aabb(t)));
+      const ts = [...state.enemies.filter(e=>e.alive), ...(state.boss.active&&state.boss.alive&&!state.boss.dead?[state.boss]:[])].filter(t=>overlap(aabb(pr),aabb(t)));
       if (ts.length){
         ts.sort((a,b)=>Math.hypot(a.x-pr.x,a.y-pr.y)-Math.hypot(b.x-pr.x,b.y-pr.y)||a.id.localeCompare(b.id));
         const t=ts[0]; state.hits.push({src:'p_proj',id:t.id||'BOSS',damage:pr.damage}); pr.destroyed=true; continue;
@@ -453,6 +453,10 @@ function resolveDamage() {
     }
   }
   if (maxP>0 && p.iframe<=0) { p.hp -= maxP; p.iframe=0.45; }
+  const b=state.boss;
+  if (b.active && b.alive && !b.dead && b.hp<=0) {
+    b.dead=true; b.death_t=0.8; state.boss_mode=false;
+  }
 }
 
 function cleanup() {
@@ -541,7 +545,7 @@ let acc=0,last=performance.now();
 function loop(now){
   if (state.game_state==='RUN') {
     acc += Math.min(0.25,(now-last)/1000); last=now;
-    while (acc>=DT) { updateLogic(); updateCamera(); acc-=DT; }
+    while (acc>=DT) { updateLogic(); acc-=DT; }
   } else last=now;
   render();
   requestAnimationFrame(loop);
