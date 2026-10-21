@@ -55,6 +55,8 @@ const dot = (a,b)=>a.x*b.x+a.y*b.y;
 
 const aabb = (o)=>({min_x:o.x-o.w/2,max_x:o.x+o.w/2,min_y:o.y-o.h/2,max_y:o.y+o.h/2});
 const overlap = (a,b)=>a.min_x<=b.max_x+EPS&&a.max_x>=b.min_x-EPS&&a.min_y<=b.max_y+EPS&&a.max_y>=b.min_y-EPS;
+// Collision resolution must require actual penetration: epsilon contacts are not walls.
+const penetrates = (a,b)=>Math.min(a.max_x,b.max_x)>Math.max(a.min_x,b.min_x) && Math.min(a.max_y,b.max_y)>Math.max(a.min_y,b.min_y);
 
 let level = null;
 let state = null;
@@ -121,7 +123,7 @@ function resolveAxis(obj, dx, dy) {
   const prev = {x:obj.x,y:obj.y};
   obj.x += dx;
   for (let i=0;i<8;i++) {
-    const hits = blockers(false).filter(r=>overlap(aabb(obj),aabb(r)));
+    const hits = blockers(false).filter(r=>penetrates(aabb(obj),aabb(r)));
     if (!hits.length) break;
     const sorted = hits.sort((a,b)=>dx>0?((a.x-a.w/2)-(b.x-b.w/2)||a.id.localeCompare(b.id)):((b.x+b.w/2)-(a.x+a.w/2)||a.id.localeCompare(b.id)));
     const o = sorted[0];
@@ -133,7 +135,7 @@ function resolveAxis(obj, dx, dy) {
   obj.grounded = false;
   obj.standing_oneway_id = '';
   for (let i=0;i<8;i++) {
-    let hits = blockers(false).filter(r=>overlap(aabb(obj),aabb(r)));
+    let hits = blockers(false).filter(r=>penetrates(aabb(obj),aabb(r)));
     if (dy<0) {
       for (const ow of state.rects.filter(r=>r.type==='OneWay')) {
         if (obj.ignore_oneway_id===ow.id) continue;
