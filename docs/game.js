@@ -539,7 +539,7 @@ function updateCamera() {
   const dx=nx-state.cam.x, dy=ny-state.cam.y;
   const sp=Math.hypot(dx,dy)/DT;
   if (sp>20){const k=(20*DT)/Math.hypot(dx,dy); nx=state.cam.x+dx*k; ny=state.cam.y+dy*k;}
-  if (state.boss_mode){nx=clamp(nx,286,314);ny=clamp(ny,-13,-9);} else {nx=clamp(nx,16,344);ny=clamp(ny,-21,1);}
+  if (state.boss_mode){nx=clamp(nx,286,314);ny=clamp(ny,-21,-9);} else {nx=clamp(nx,16,344);ny=clamp(ny,-21,1);}
   state.cam.x=nx;state.cam.y=ny;
 }
 

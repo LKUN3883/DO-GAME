@@ -89,3 +89,12 @@ test('ground contact does not cancel ordinary enemy melee knockback; wall backtr
   g.run("state.hits=[];state.enemies[0].x=8;state.rects.push({id:'stop',type:'Wall',x:9.2,y:-22,w:1,h:8});state.hits=[{src:'p_melee',id:'target',damage:80}];resolveDamage()");
   assert.ok(g.run('state.enemies[0].x')<8.201);assert.equal(g.run('state.enemies[0].hp'),-50);
 });
+
+
+test('approved Boss camera Y bounds are -21 and -9; X bounds remain 286 and 314',async()=>{
+  const g=await game();
+  g.run('state.boss_mode=true;state.cam={x:0,y:-50};updateCamera()');
+  assert.equal(g.run('state.cam.y'),-21);assert.equal(g.run('state.cam.x'),286);
+  g.run('state.cam={x:400,y:50};updateCamera()');
+  assert.equal(g.run('state.cam.y'),-9);assert.equal(g.run('state.cam.x'),314);
+});

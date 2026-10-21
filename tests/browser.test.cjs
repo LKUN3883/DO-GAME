@@ -26,7 +26,11 @@ after(async()=>{await browser?.close();await new Promise(r=>server?server.close(
 async function game(t){
   const p=await browser.newPage({viewport:{width:1280,height:800}});t.after(()=>p.close());
   const errors=[];p.on('pageerror',e=>errors.push(e.message));t.after(()=>assert.deepEqual(errors,[]));
-  await p.clock.install();await p.goto(base);await p.waitForFunction(()=>window.__test?.run('state!==null'));
+  await p.clock.install({time:new Date('2026-10-21T00:00:00Z')});
+  // Pause before loading: only advance() may run RAF ticks, not host delays
+  // between separate keyboard/mouse/state inspection calls.
+  await p.clock.pauseAt(new Date('2026-10-21T00:00:10Z'));
+  await p.goto(base);await p.waitForFunction(()=>window.__test?.run('state!==null'));
   const run=code=>p.evaluate(code=>window.__test.run(code),code);
   await p.clock.runFor(1000);return {p,run,advance:ms=>p.clock.runFor(ms)};
 }
@@ -89,7 +93,11 @@ test('browser: boss trigger keeps the grounded player and Boss visible',async t=
   const bottom=scene.cam.y-9;
   t.diagnostic(JSON.stringify({cameraBottom:bottom,playerTop:scene.player.y+scene.player.h/2,bossTop:scene.boss.y+scene.boss.h/2,playerVisible:scene.player.y+scene.player.h/2>=bottom,bossVisible:scene.boss.y+scene.boss.h/2>=bottom}));
   if(process.env.BROWSER_SCREENSHOT) await p.screenshot({path:process.env.BROWSER_SCREENSHOT});
-  assert.ok(scene.player.y+scene.player.h/2>=bottom && scene.boss.y+scene.boss.h/2>=bottom,'Boss camera clamp hides both grounded combatants below the canvas');
+  assert.equal(scene.cam.y,-21,'Boss camera uses the approved lower bound');
+  for(const body of [scene.player,scene.boss]) {
+    assert.ok(body.y-body.h/2>=bottom && body.y+body.h/2<=scene.cam.y+9,'entire grounded combatant must be vertically visible');
+    assert.ok(body.x-body.w/2>=scene.cam.x-16 && body.x+body.w/2<=scene.cam.x+16,'entire combatant must be horizontally visible in this scene');
+  }
 });
 
 test('browser: right mouse launches and pulls grapple, then release cancels it',async t=>{
