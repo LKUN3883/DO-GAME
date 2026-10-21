@@ -102,7 +102,7 @@ async function scenario(name,fixture,body){
     await frames(12);const after=await read();
     assert.equal(after.player.dash,null);assert.equal(after.player.dash_used,true);
     assert.ok(after.player.x-before.player.x>5.8&&after.player.x-before.player.x<=6.01,'6 cm dash');
-    await page.keyboard.press('Space');await frames(2);assert.equal((await read()).player.dash,null);
+    await page.keyboard.down('Space');await frames(2);await page.keyboard.up('Space');assert.equal((await read()).player.dash,null);
     await page.waitForFunction(()=>window.__qa.snapshot().player.grounded,null,{timeout:5000});
     return {jumpRise:jumping.player.y-start.player.y,dashX:after.player.x-before.player.x,landed:(await read()).player.grounded};
   });
@@ -110,7 +110,7 @@ async function scenario(name,fixture,body){
     const start=await read();await aim(14,start.player.y);await page.mouse.down({button:'right'});
     await page.waitForFunction(()=>window.__qa.snapshot().grapple.mode==='pull');
     await frames(10);const pulled=await read();assert.ok(pulled.player.x>start.player.x+1);
-    await page.keyboard.press('Space');await frames(2);assert.equal((await read()).player.dash,null);
+    await page.keyboard.down('Space');await frames(2);await page.keyboard.up('Space');assert.equal((await read()).player.dash,null);
     await page.mouse.up({button:'right'});await frames(3);
     const stopped=await read();assert.equal(stopped.grapple.mode,'none');
     await frames(8);assert.ok(Math.abs((await read()).player.x-stopped.player.x)<1e-9);
@@ -119,8 +119,9 @@ async function scenario(name,fixture,body){
   await scenario('grapple-stuck-release','quiet',async({page,read,frames,aim})=>{
     const start=await read();await aim(start.player.x,-25.5);await page.mouse.down({button:'right'});
     await page.waitForFunction(()=>window.__qa.snapshot().grapple.mode==='stuck');
-    const stuck=await read();await page.keyboard.down('KeyD');await page.keyboard.press('Space');
-    await page.keyboard.press('KeyF');await page.mouse.down({button:'left'});await frames(10);
+    const stuck=await read();await page.keyboard.down('KeyD');await page.keyboard.down('Space');await frames(2);await page.keyboard.up('Space');
+    await page.keyboard.down('KeyF');await frames(2);await page.keyboard.up('KeyF');
+    await page.mouse.down({button:'left'});await frames(10);
     const frozen=await read();assert.equal(frozen.grapple.mode,'stuck');
     assert.equal(frozen.player.x,stuck.player.x);assert.equal(frozen.player.y,stuck.player.y);
     assert.equal(frozen.player.dash,null);assert.ok(frozen.player.melee);assert.ok(frozen.player.ammo<60);
