@@ -45,6 +45,8 @@ canvas.addEventListener('mousemove', (e) => {
 });
 canvas.addEventListener('mousedown', (e) => { if (e.button === 0) keyRaw.set('Mouse0', true); if (e.button === 2) keyRaw.set('Mouse2', true);});
 canvas.addEventListener('mouseup', (e) => { if (e.button === 0) keyRaw.set('Mouse0', false); if (e.button === 2) keyRaw.set('Mouse2', false);});
+// Releasing outside the canvas must also end a held grapple.
+window.addEventListener('mouseup', (e) => { if (e.button === 2) keyRaw.set('Mouse2', false); });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
 const clamp = (x,a,b)=>Math.min(Math.max(x,a),b);
@@ -77,7 +79,7 @@ function resetAll() {
     player:{x:p.x,y:p.y,vx:0,vy:0,w:1,h:2,facing:p.facing,grounded:false,standing_oneway_id:'',ignore_oneway_id:'',ignore_timer:0,hp:100,st:100,ammo:60,iframe:0,dash_used:false,dash:null,jump_t:0,jump_ascend:false,crouch:false,slide:null,melee:null,respawn_lock:0},
     boss:{...level.boss, alive:true, hp:420, vx:0, vy:0, grounded:false, active:false, dead:false, death_t:0, phase:'rifle', phase_t:2, shoot_cd:0, shot_count:0, charge_t:0, charge_pending:false, warning_t:0, charge:null},
     rects, enemies, projectiles:[], spawn_seq:0,
-    grapple:{mode:'none',head:null,anchor:null,target:null,local:null,stuck_frames:0,end:false},
+    grapple:emptyGrapple(),
     cam:{x:p.x,y:p.y},
     hint:{text:'',t:0},
     boss_mode:false,
@@ -117,6 +119,83 @@ function playerAimDir() {
   const raw = {x:mw.x-state.player.x,y:mw.y-state.player.y};
   if (len(raw)<=EPS) return {x:state.player.facing,y:0};
   return norm(raw);
+}
+
+function emptyGrapple() {
+  return {mode:'none',head:null,anchor:null,target:null,local:null,stuck_frames:0,end:false};
+}
+function grapplePulling() {
+  const g=state.grapple;
+  return !g.end && (g.mode==='pull' || g.mode==='stuck');
+}
+function endGrapple() {
+  // Stop its effects now; remove the head/state in the cleanup stage (21.1.12).
+  state.grapple.end=true;
+  state.player.vx=0; state.player.vy=0;
+}
+function spawnGrapple(aim) {
+  const p=state.player;
+  const head={x:p.x+aim.x*0.9,y:p.y+aim.y*0.9,w:0.3,h:0.3,vx:aim.x*28,vy:aim.y*28};
+  const start={x:head.x,y:head.y};
+  const blocked=()=>blockers(true).some(r=>overlap(aabb(head),aabb(r)));
+  for (let step=1;blocked() && step<=18;step++) {
+    head.x=start.x-aim.x*step*0.05;
+    head.y=start.y-aim.y*step*0.05;
+  }
+  if (blocked()) return false;
+  head.origin={x:head.x,y:head.y};
+  state.grapple={...emptyGrapple(),mode:'fly',head};
+  return true;
+}
+function refreshGrappleAnchor() {
+  const g=state.grapple;
+  if (g.local) {
+    g.anchor={x:g.target.x+g.local.x,y:g.target.y+g.local.y};
+    g.head.x=g.anchor.x; g.head.y=g.anchor.y;
+  }
+}
+function moveGrapplePlayer(input_x) {
+  const g=state.grapple,p=state.player;
+  refreshGrappleAnchor();
+  if (g.mode==='stuck') { p.vx=0; p.vy=0; return; }
+  if (Math.hypot(g.anchor.x-p.x,g.anchor.y-p.y)<=0.8+EPS) { endGrapple(); return; }
+  const prev={x:p.x,y:p.y};
+  const dir=norm({x:g.anchor.x-prev.x,y:g.anchor.y-prev.y});
+  p.vx=dir.x*10+input_x*3; p.vy=dir.y*10;
+  resolveAxis(p,p.vx*DT,p.vy*DT);
+  const advance=dot({x:p.x-prev.x,y:p.y-prev.y},dir);
+  g.stuck_frames=advance<=EPS ? g.stuck_frames+1 : 0;
+  if (g.stuck_frames>=3) { g.mode='stuck'; p.vx=0; p.vy=0; }
+  else if (Math.hypot(g.anchor.x-p.x,g.anchor.y-p.y)<=0.8+EPS) endGrapple();
+}
+function updateGrapple() {
+  const g=state.grapple;
+  if (g.end || g.mode==='none') return;
+  if (g.mode!=='fly') {
+    refreshGrappleAnchor();
+    if (g.mode!=='stuck' && Math.hypot(g.anchor.x-state.player.x,g.anchor.y-state.player.y)<=0.8+EPS) endGrapple();
+    return;
+  }
+  const h=g.head;
+  h.x+=h.vx*DT; h.y+=h.vy*DT;
+  const characters=[...state.enemies.filter(e=>e.alive),...(state.boss.alive&&!state.boss.dead?[state.boss]:[])];
+  const groups=[characters,state.rects.filter(r=>r.type==='OneWay'),blockers(false)];
+  for (const group of groups) {
+    const hits=group.filter(t=>overlap(aabb(h),aabb(t)));
+    hits.sort((a,b)=>Math.hypot(a.x-h.x,a.y-h.y)-Math.hypot(b.x-h.x,b.y-h.y) || (a.id<b.id?-1:a.id>b.id?1:0));
+    if (!hits.length) continue;
+    const target=hits[0],box=aabb(target);
+    g.target=target;
+    g.anchor={x:clamp(h.x,box.min_x,box.max_x),y:clamp(h.y,box.min_y,box.max_y)};
+    if (group===characters) g.local={x:g.anchor.x-target.x,y:g.anchor.y-target.y};
+    g.mode='pull'; h.x=g.anchor.x; h.y=g.anchor.y; h.vx=0; h.vy=0;
+    // Pull overrides ongoing aerial movement; no suspended Dash/ascent resumes later.
+    state.player.dash=null; state.player.jump_ascend=false;
+    if (Math.hypot(g.anchor.x-state.player.x,g.anchor.y-state.player.y)<=0.8+EPS) endGrapple();
+    return;
+  }
+  // Distance is measured from the final (possibly backtracked) spawn center.
+  if (Math.hypot(h.x-h.origin.x,h.y-h.origin.y)>40) endGrapple();
 }
 
 function resolveAxis(obj, dx, dy) {
@@ -171,14 +250,17 @@ function updateLogic() {
   if (input_x!==0) p.facing=input_x;
   const aim = playerAimDir();
 
-  const downThrough = p.grounded && p.standing_oneway_id && input.S.down && input.Jump.just_pressed;
+  if (input.RMB.just_released && state.grapple.mode!=='none') endGrapple();
+  const pulling=grapplePulling();
+
+  const downThrough = !pulling && p.grounded && p.standing_oneway_id && input.S.down && input.Jump.just_pressed;
   if (downThrough) { p.ignore_oneway_id = p.standing_oneway_id; p.ignore_timer = 0.2; }
 
-  const jumpedThisFrame = p.grounded && input.Jump.just_pressed && !downThrough;
+  const jumpedThisFrame = !pulling && p.grounded && input.Jump.just_pressed && !downThrough;
   if (jumpedThisFrame) { p.vy=53.334; p.jump_ascend=true; p.jump_t=0; }
   if (p.jump_ascend) { p.jump_t+=DT; if (p.jump_t>0.3||p.vy<=0) p.jump_ascend=false; }
 
-  if (!jumpedThisFrame && !p.grounded && !p.dash && !state.grapple.mode.startsWith('pull') && input.Jump.just_pressed && !p.dash_used) {
+  if (!jumpedThisFrame && !p.grounded && !p.dash && !pulling && input.Jump.just_pressed && !p.dash_used) {
     if (p.st>=30) { p.st-=30; p.dash_used=true; p.dash={dir:aim,left:6}; p.vx=0; p.vy=0; }
     else { state.hint={text:'体力不足',t:0.5}; }
   }
@@ -188,15 +270,11 @@ function updateLogic() {
     else state.hint={text:'体力不足',t:0.5};
   }
 
-  // grapple
-  if (input.RMB.just_released) state.grapple={mode:'none',head:null,anchor:null,target:null,local:null,stuck_frames:0,end:false};
-  if (input.RMB.just_pressed && state.grapple.mode==='none') {
-    let hx=p.x+aim.x*0.9, hy=p.y+aim.y*0.9;
-    const head={x:hx,y:hy,w:0.3,h:0.3,vx:aim.x*28,vy:aim.y*28,origin:{x:hx,y:hy}};
-    state.grapple={mode:'fly',head,anchor:null,target:null,local:null,stuck_frames:0,end:false};
-  }
+  if (input.RMB.just_pressed && state.grapple.mode==='none') spawnGrapple(aim);
 
-  if (p.dash) {
+  if (pulling) {
+    moveGrapplePlayer(input_x);
+  } else if (p.dash) {
     const step = Math.min(50*DT,p.dash.left);
     p.vx = p.dash.dir.x*50; p.vy = p.dash.dir.y*50;
     resolveAxis(p,p.dash.dir.x*step,p.dash.dir.y*step);
@@ -212,7 +290,7 @@ function updateLogic() {
       p.vx=input_x*8;
       if (p.grounded && p.vx!==0 && input.S.just_pressed) p.slide={dir:p.facing,t:0};
     }
-    if (!p.jump_ascend && !state.grapple.mode.startsWith('pull')) p.vy = Math.max(-15,p.vy + (-180)*DT);
+    if (!p.jump_ascend) p.vy = Math.max(-15,p.vy + (-180)*DT);
     if (p.jump_ascend) p.vy += (-177.78)*DT;
     resolveAxis(p,p.vx*DT,p.vy*DT);
   }
@@ -255,6 +333,7 @@ function updateLogic() {
   updateEnemies();
   updateBoss();
   updateProjectiles();
+  updateGrapple(); // 21.1.10: head movement/hit detection, after character movement.
   resolveDamage(); // Assertion B point
   cleanup(); // Assertion C/E point
   postChecks();
@@ -381,6 +460,9 @@ function cleanup() {
   for (const e of state.enemies) if (e.alive && e.hp<=0) e.alive=false;
   const b=state.boss;
   if (b.dead) { b.death_t -= DT; if (b.death_t<=0){ b.alive=false; const db=state.rects.find(r=>r.id==='DoorBoss'); if (db) db.locked=false; } }
+  const g=state.grapple;
+  if (g.local && (!g.target.alive || g.target.dead || g.target.hp<=0)) endGrapple();
+  if (g.end) state.grapple=emptyGrapple();
   state.hits = [];
 }
 
@@ -404,6 +486,7 @@ function postChecks() {
 }
 
 function respawn() {
+  state.grapple=emptyGrapple();
   const cp = state.rects.filter(r=>r.type==='Checkpoint').sort((a,b)=>Math.hypot(state.player.x-a.x,state.player.y-a.y)-Math.hypot(state.player.x-b.x,state.player.y-b.y))[0] || {respawn_x:level.player_spawn.x,respawn_y:level.player_spawn.y,respawn_facing:level.player_spawn.facing};
   Object.assign(state.player,{x:cp.respawn_x,y:cp.respawn_y,vx:0,vy:0,hp:100,st:100,ammo:60,dash_used:false,dash:null,iframe:0,ignore_oneway_id:'',ignore_timer:0,jump_ascend:false,slide:null,crouch:false,facing:cp.respawn_facing,respawn_lock:1});
   state.projectiles=[];
@@ -435,6 +518,13 @@ function render() {
   for (const e of state.enemies.filter(e=>e.alive)) drawRect(e,e.type==='melee_basic'?'rgba(255,120,120,.86)':e.type==='ranged_rifle'?'rgba(255,170,80,.86)':'rgba(180,120,255,.86)');
   if (state.boss.alive) drawRect(state.boss,'rgba(255,200,80,.86)');
   for (const p of state.projectiles) drawRect(p,p.owner==='player'?'rgba(235,235,235,1)':(p.w<0.2?'rgba(220,180,255,1)':'rgba(255,240,160,1)'));
+  const g=state.grapple;
+  if (g.head && !g.end) {
+    const from=toScreen(state.player.x,state.player.y),to=toScreen(g.head.x,g.head.y);
+    ctx.strokeStyle='rgba(160,160,160,1)';ctx.lineWidth=2;
+    ctx.beginPath();ctx.moveTo(from.x,from.y);ctx.lineTo(to.x,to.y);ctx.stroke();
+    drawRect(g.head,'rgba(160,160,160,1)');
+  }
   drawRect(state.player,'rgba(80,180,255,.86)');
   const aim=playerAimDir();
   const s=toScreen(state.player.x,state.player.y), e=toScreen(state.player.x+aim.x*2,state.player.y+aim.y*2);
