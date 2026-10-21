@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - repair/blueprint-bugs-pass1
+      - audit/respawn-body-20261021
   pull_request:
     branches:
       - main
