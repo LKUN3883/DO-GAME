@@ -1,0 +1,48 @@
+name: Game smoke tests
+on:
+  push:
+    branches:
+      - repair/blueprint-bugs-pass1
+      - repair/grapple-ch14
+  pull_request:
+    branches:
+      - main
+      - repair/blueprint-bugs-pass1
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --check docs/game.js
+      - run: npm ci
+      - run: npm test
+  chromium:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: mkdir -p test-artifacts
+      - run: npm run test:browser
+        env:
+          BROWSER_SCREENSHOT: test-artifacts/boss-room.png
+      - run: npm run test:browser:grapple
+        if: ${{ !cancelled() }}
+      - run: npm run test:playthrough
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: chromium-acceptance
+          path: |
+            test-artifacts/*.png
+            browser-results/
+          if-no-files-found: warn

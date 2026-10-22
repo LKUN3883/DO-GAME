@@ -1,0 +1,110 @@
+{
+  "dt": 0.016666666666666666,
+  "eps": 0.001,
+  "px_per_cm": 40,
+  "player": {
+    "hp": 100,
+    "st": 100,
+    "ammo": 60,
+    "speed": 8,
+    "gravity": -180,
+    "fall_speed": -15,
+    "jump_speed": 53.334,
+    "jump_gravity": -177.78,
+    "jump_ascend_time": 0.3,
+    "st_regen": 12,
+    "iframe": 0.45,
+    "stand_size": [
+      1,
+      2
+    ],
+    "crouch_size": [
+      1,
+      1
+    ],
+    "slide_speed": 10,
+    "slide_time": 0.9,
+    "dash_speed": 50,
+    "dash_distance": 6,
+    "dash_cost": 30
+  },
+  "melee": {
+    "damage": 80,
+    "cost": 18,
+    "range": 3.2,
+    "half_angle": 60,
+    "window": 0.45,
+    "recovery": 0.55,
+    "knockback": 0.6,
+    "backtrack_step": 0.05
+  },
+  "projectile": {
+    "player_speed": 30,
+    "player_damage": 9,
+    "player_rate": 10,
+    "spawn_offset": 0.8,
+    "backtrack_step": 0.05,
+    "backtrack_max": 0.8
+  },
+  "grapple": {
+    "size": [
+      0.3,
+      0.3
+    ],
+    "offset": 0.9,
+    "backtrack_step": 0.05,
+    "backtrack_max": 0.9,
+    "speed": 28,
+    "range": 40,
+    "pull_speed": 10,
+    "adjust_speed": 3,
+    "stuck_frames": 3,
+    "finish_distance": 0.8
+  },
+  "enemy": {
+    "melee_hp": 110,
+    "melee_speed": 5,
+    "melee_rate": 1.1,
+    "melee_damage": 22,
+    "melee_range": 1.2,
+    "rifle_hp": 95,
+    "rifle_rate": 8,
+    "rifle_speed": 26,
+    "rifle_damage": 2,
+    "shotgun_hp": 105,
+    "shotgun_rate": 0.85,
+    "shotgun_speed": 20,
+    "shotgun_damage": 4,
+    "shotgun_angles": [
+      -15,
+      -7.5,
+      0,
+      7.5,
+      15
+    ]
+  },
+  "boss": {
+    "hp": 420,
+    "phase2_hp": 210,
+    "rifle_time": 2,
+    "rifle_rate": 10,
+    "idleA_time": 0.5,
+    "shotgun_volleys": 4,
+    "shotgun_interval": 0.9,
+    "idleB_time": 0.6,
+    "charge_period": 3.8,
+    "warning_time": 0.2,
+    "charge_speed": 18,
+    "charge_distance": 6,
+    "charge_damage": 18,
+    "death_delay": 0.8,
+    "camera_x": [
+      286,
+      314
+    ],
+    "camera_y": [
+      -21,
+      -9
+    ]
+  }
+}
