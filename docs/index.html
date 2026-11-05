@@ -1,16 +1,42 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>DO-GAME</title>
   <style>
-    html, body { margin: 0; background: #111; height: 100%; overflow: hidden; }
+    html, body { margin: 0; background: #111; min-height: 100%; }
+    body { overflow: auto; color: #eee; font: 15px/1.5 system-ui, sans-serif; }
+    main { width: min(1280px, 100%); margin: 0 auto; }
     #game { display:block; margin:0 auto; background:#1b1b1b; image-rendering: pixelated; }
+    #controls { box-sizing: border-box; width: 100%; margin: 12px auto 24px; padding: 12px 16px; border: 1px solid #444; border-radius: 8px; background: #1b1b1b; }
+    #controls summary { cursor: pointer; font-weight: 700; }
+    #controls ul { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 4px 24px; margin: 10px 0 0; padding-left: 22px; }
+    #controls p { margin: 8px 0 0; color: #bbb; }
   </style>
 </head>
 <body>
-  <canvas id="game" width="1280" height="720"></canvas>
+  <main>
+    <canvas id="game" width="1280" height="720" aria-label="DO-GAME 游戏画面"></canvas>
+    <details id="controls" open>
+      <summary>键鼠操作说明（点击收起或展开）</summary>
+      <ul>
+        <li><strong>A / D：</strong>向左 / 向右移动</li>
+        <li><strong>S：</strong>静止时蹲下；移动时滑铲</li>
+        <li><strong>S + W / Space：</strong>从单向平台下穿</li>
+        <li><strong>W / Space：</strong>跳跃；空中再次按下可冲刺</li>
+        <li><strong>F：</strong>近战攻击</li>
+        <li><strong>鼠标移动：</strong>瞄准</li>
+        <li><strong>鼠标左键按住：</strong>连续射击</li>
+        <li><strong>鼠标右键按住：</strong>发射并维持钩爪；松开结束</li>
+      </ul>
+      <p>键盘操作在页面获得焦点时生效；鼠标射击和钩爪请在游戏画布内按下。</p>
+    </details>
+  </main>
+  <script>
+    // Keep guide keyboard navigation from also triggering game actions.
+    document.getElementById('controls').addEventListener('keydown', (event) => event.stopPropagation());
+  </script>
   <script type="module" src="./game.js"></script>
 </body>
 </html>
