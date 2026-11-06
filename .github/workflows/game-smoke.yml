@@ -48,7 +48,7 @@ jobs:
         if: runner.os == 'Windows'
         run: npx playwright install chromium
       - name: Create screenshot directory
-        run: node -e "require('node:fs').mkdirSync('test-artifacts', { recursive: true })"
+        run: node -e "require('node:fs').mkdirSync('test-artifacts',{recursive:true})"
       - run: npm run test:browser
         env:
           BROWSER_SCREENSHOT: test-artifacts/boss-room.png
