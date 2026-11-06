@@ -2,6 +2,7 @@ name: Game smoke tests
 on:
   push:
     branches:
+      - main
       - repair/blueprint-bugs-pass1
       - repair/grapple-ch14
   pull_request:
@@ -12,7 +13,12 @@ permissions:
   contents: read
 jobs:
   smoke:
-    runs-on: ubuntu-latest
+    name: Node smoke (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -22,26 +28,38 @@ jobs:
       - run: npm ci
       - run: npm test
   chromium:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    name: Chromium acceptance (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
-      - run: mkdir -p test-artifacts
+      - name: Install Chromium and Linux dependencies
+        if: runner.os == 'Linux'
+        run: npx playwright install --with-deps chromium
+      - name: Install Chromium
+        if: runner.os == 'Windows'
+        run: npx playwright install chromium
+      - name: Create screenshot directory
+        run: node -e "require('node:fs').mkdirSync('test-artifacts', { recursive: true })"
       - run: npm run test:browser
         env:
           BROWSER_SCREENSHOT: test-artifacts/boss-room.png
       - run: npm run test:browser:grapple
         if: ${{ !cancelled() }}
       - run: npm run test:playthrough
+        if: ${{ !cancelled() }}
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: chromium-acceptance
+          name: chromium-acceptance-${{ matrix.os }}
           path: |
             test-artifacts/*.png
             browser-results/
