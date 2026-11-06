@@ -21,6 +21,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - name: Restore LF fixture files for text assertions
+        if: runner.os == 'Windows'
+        run: git -c core.autocrlf=false checkout -- docs/spec/BLUEPRINT_v1.3.2d-e_FINAL.md docs/level_train_v1.json
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
