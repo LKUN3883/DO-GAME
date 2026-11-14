@@ -23,8 +23,8 @@ before(async()=>{
   browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_EXECUTABLE_PATH||undefined,args:['--no-sandbox','--disable-dev-shm-usage']});
 });
 after(async()=>{await browser?.close();await new Promise(r=>server?server.close(r):r());});
-async function game(t){
-  const p=await browser.newPage({viewport:{width:1280,height:800}});t.after(()=>p.close());
+async function game(t,viewport={width:1280,height:800}){
+  const p=await browser.newPage({viewport});t.after(()=>p.close());
   const errors=[];p.on('pageerror',e=>errors.push(e.message));t.after(()=>assert.deepEqual(errors,[]));
   await p.clock.install({time:new Date('2026-10-21T00:00:00Z')});
   // Pause before loading: only advance() may run RAF ticks, not host delays
@@ -34,6 +34,41 @@ async function game(t){
   const run=code=>p.evaluate(code=>window.__test.run(code),code);
   await p.clock.runFor(1000);return {p,run,advance:ms=>p.clock.runFor(ms)};
 }
+
+test('browser: responsive Canvas keeps full view and maps aim, shots and grapple at narrow and baseline viewports',async t=>{
+ for(const width of [768,1024,1280]) {
+  const {p,run}=await game(t,{width,height:800});
+  const bounds=await p.locator('#game').boundingBox();
+  assert.ok(bounds,'Canvas is visible');
+  const expectedWidth=Math.min(width,1280);
+  assert.ok(Math.abs(bounds.width-expectedWidth)<1,`Canvas width is correct at ${width}px`);
+  assert.ok(Math.abs(bounds.height-expectedWidth*720/1280)<1,`Canvas keeps its aspect ratio at ${width}px`);
+  assert.ok(bounds.x>=0 && bounds.x+bounds.width<=width+1 && bounds.y>=0 && bounds.y+bounds.height<=800,'entire Canvas fits in the viewport');
+  assert.ok(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'page has no horizontal overflow');
+
+  await run("state.enemies=[];state.rects=[];Object.assign(state.player,{x:6,y:0,vx:0,vy:0,respawn_lock:0});state.cam={x:state.player.x,y:state.player.y};state.p_fire_cd=0");
+  const rect=await p.locator('#game').boundingBox();
+  const target={x:rect.x+rect.width*0.75,y:rect.y+rect.height*0.25};
+  await p.mouse.move(target.x,target.y);
+  const aim=await run('playerAimDir()');
+  const magnitude=Math.hypot(8,4.5);
+  const expectedAim={x:8/magnitude,y:4.5/magnitude};
+  assert.ok(Math.abs(aim.x-expectedAim.x)<0.02 && Math.abs(aim.y-expectedAim.y)<0.02,`aim maps to the logical target at ${width}px: ${JSON.stringify(aim)}`);
+
+  await p.mouse.down();
+  await oneLogicTick(p);
+  const shot=await run("state.projectiles.find(projectile=>projectile.owner==='player')");
+  assert.ok(shot && Math.abs(shot.vx-expectedAim.x*30)<0.7 && Math.abs(shot.vy-expectedAim.y*30)<0.7,`shot follows mapped aim at ${width}px: ${JSON.stringify(shot)}`);
+  await p.mouse.up();
+  await run('state.projectiles=[];state.p_fire_cd=0;state.grapple=emptyGrapple()');
+
+  await p.mouse.down({button:'right'});
+  await oneLogicTick(p);
+  const grapple=await run('state.grapple');
+  assert.ok(grapple.head && Math.abs(grapple.head.vx-expectedAim.x*28)<0.7 && Math.abs(grapple.head.vy-expectedAim.y*28)<0.7,`grapple follows mapped aim at ${width}px: ${JSON.stringify(grapple)}`);
+  await p.mouse.up({button:'right'});
+ }
+});
 
 test('browser: real A/D key events stop on release, A+D cancel, blur clears input',async t=>{
   const {p,run,advance}=await game(t);const x=await run('state.player.x');

@@ -40,8 +40,10 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('mousemove', (e) => {
   const r = canvas.getBoundingClientRect();
-  mx = Math.round(e.clientX - r.left);
-  my = Math.round(e.clientY - r.top);
+  // Pointer events use displayed CSS pixels; aim and grapple use the fixed
+  // 1280×720 logical Canvas coordinates.
+  mx = Math.round((e.clientX - r.left) * canvas.width / r.width);
+  my = Math.round((e.clientY - r.top) * canvas.height / r.height);
 });
 canvas.addEventListener('mousedown', (e) => { if (e.button === 0) keyRaw.set('Mouse0', true); if (e.button === 2) keyRaw.set('Mouse2', true);});
 window.addEventListener('mouseup', (e) => { if (e.button === 0) keyRaw.set('Mouse0', false); if (e.button === 2) keyRaw.set('Mouse2', false);});
