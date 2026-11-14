@@ -46,7 +46,7 @@ test('browser: responsive Canvas keeps full view and maps aim, shots and grapple
   assert.ok(bounds.x>=0 && bounds.x+bounds.width<=width+1 && bounds.y>=0 && bounds.y+bounds.height<=800,'entire Canvas fits in the viewport');
   assert.ok(await p.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'page has no horizontal overflow');
 
-  await run("state.enemies=[];state.rects=[];Object.assign(state.player,{x:6,y:0,vx:0,vy:0,respawn_lock:0});state.cam={x:state.player.x,y:state.player.y};state.p_fire_cd=0");
+  await run("state.enemies=[];state.rects=[];Object.assign(state.player,{x:6,y:0,vx:0,vy:0,respawn_lock:0});state.cam={x:state.player.x,y:state.player.y};updateCamera=()=>{};state.p_fire_cd=0");
   const rect=await p.locator('#game').boundingBox();
   const target={x:rect.x+rect.width*0.75,y:rect.y+rect.height*0.25};
   await p.mouse.move(target.x,target.y);
