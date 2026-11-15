@@ -58,6 +58,7 @@ jobs:
       - name: Game feel baseline and display regression
         run: node --test tests/game-feel.test.cjs
         env:
+          GAME_FEEL_BUILD: original-main-baseline
           GAME_FEEL_RESULTS: test-artifacts/game-feel-baseline.json
           GAME_FEEL_SCREENSHOT: test-artifacts/game-feel-baseline.png
       - run: npm run test:browser:grapple
