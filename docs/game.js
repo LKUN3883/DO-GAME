@@ -763,7 +763,7 @@ function render() {
     const pos=toScreen(enemyPos.x,enemyPos.y+enemy.h/2);
     ctx.fillStyle='white';ctx.fillText('!',Math.round(pos.x),Math.round(pos.y-12));
   }
-  const aim=playerAimDir();
+  const aim=renderAimDir(renderCam,playerPos);
   const s=toScreen(playerPos.x,playerPos.y), e=toScreen(playerPos.x+aim.x*2,playerPos.y+aim.y*2);
   ctx.strokeStyle='white';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(s.x,s.y);ctx.lineTo(e.x,e.y);ctx.stroke();
   const fx=Math.round(s.x+state.player.facing*(state.player.w*PX_PER_CM/2+4)),fy=Math.round(s.y);
@@ -795,6 +795,13 @@ function interpolateRenderPoint(previous,current,alpha,maxDistance=4) {
 }
 function renderPosition(key,object,alpha) {
   return interpolateRenderPoint(renderPrevious?.entities.get(key),object,alpha,2);
+}
+function renderAimDir(renderCam,playerPos) {
+  if(state.game_state==='WIN' && state.win_aim)return state.win_aim;
+  if(state.player.respawn_lock>0 || state.aim_input_locked)return {x:state.player.facing,y:0};
+  const mouseWorld={x:renderCam.x-VIEW_HW+(mx/PX_PER_CM),y:renderCam.y+VIEW_HH-(my/PX_PER_CM)};
+  const raw={x:mouseWorld.x-playerPos.x,y:mouseWorld.y-playerPos.y};
+  return len(raw)<=EPS?{x:state.player.facing,y:0}:norm(raw);
 }
 
 let acc=0,last=performance.now();
