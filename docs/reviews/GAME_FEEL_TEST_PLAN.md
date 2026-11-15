@@ -40,7 +40,24 @@ A player must still rate responsiveness, momentum, air control, action chaining,
 
 ## Current status
 
-- Original-build automated baseline: pending CI run for this test PR.
+- Original-build baseline: captured on `main` `ceac64e88d98203d9a7c540c1f58fd9868681d54`, Chromium 151, 1280×800 viewport.
+- Final baseline run: [Actions #43700789079](https://github.com/LKUN3883/DO-GAME/actions/runs/43700789079), four jobs succeeded; Game Feel suite 4/4 passed on Ubuntu and Windows.
+- Raw JSON and screenshots: [Ubuntu artifacts](https://github.com/LKUN3883/DO-GAME/actions/runs/43700789079/artifacts/14156526778) · [Windows artifacts](https://github.com/LKUN3883/DO-GAME/actions/runs/43700789079/artifacts/14156760766).
+
+| Original-build measurement | Ubuntu Chromium | Windows Chromium |
+|---|---:|---:|
+| A/D response | 1 tick; +0.133333 world units; velocity 8 | same |
+| Key release | sampled in 1 tick; 0 post-sample drift | same |
+| Reverse A after D | 1 tick; −0.133333 world units; velocity −8 | same |
+| Jump | response 1 tick; apex tick 16; rise 7.55565 world units | same |
+| Landing | 29 ticks from descent detection to grounded sample | same |
+| Air Dash | response 1 tick; 7 active ticks; displacement (+5.94453, +0.81401) | same |
+| Slide | entry 1 tick; reverse input sampled in 1 tick but direction retained; 50 ticks; +4.41667 units | same |
+| Grapple | entry 1 tick; fly-to-pull in 11 ticks; release-to-none in 1 tick | same |
+| Collision / blur | wall prevents crossing, movement resumes after wall removal; blur clears velocity; 0 post-blur drift | same |
+| Display | 1280×720 logical and CSS Canvas, no horizontal overflow; visible-pixel ratio 7.12% | 7.15% |
+
+`same` means matching movement/action metrics in the captured JSON; display pixel ratio varies slightly between runners. These are automated reference values, not player-rated targets.
 - Hand-feel experimental build: not supplied; joint comparison pending.
 - UI/effects experimental build: not supplied; paired render comparison pending.
 - Windows human evaluation: separate from this automated suite.
