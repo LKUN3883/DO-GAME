@@ -803,8 +803,7 @@ function loop(now){
     acc += Math.min(0.25,(now-last)/1000); last=now;
     while (acc>=DT && state.game_state==='RUN') {
       renderPrevious=captureRenderState();
-      updateLogic();
-      acc-=DT;
+      updateLogic(); acc-=DT;
       if(state.game_state!=='RUN')renderPrevious=captureRenderState();
     }
   } else last=now;
