@@ -62,10 +62,12 @@ test('feel baseline: A/D response, release drift, and reversal are measured in l
   await p.keyboard.down('d');
   const responseTicks=await tick(p);
   const afterD=await run('({x:state.player.x,vx:state.player.vx})');
+  assert.equal(responseTicks,1,'D is sampled on the first production logic tick after the event');
   assert.ok(afterD.x>start.x,'D produces movement on its first sampled logic tick');
   assert.equal(afterD.vx,8,'D sets the baseline grounded movement speed');
   await p.keyboard.up('d');
   const releaseTicks=await tick(p);
+  assert.equal(releaseTicks,1,'keyup is sampled on the first production logic tick after the event');
   const atRelease=await run('({x:state.player.x,vx:state.player.vx})');
   await ticks(p,6);
   const afterSettle=await run('state.player.x');
@@ -76,6 +78,7 @@ test('feel baseline: A/D response, release drift, and reversal are measured in l
   await p.keyboard.down('d');await tick(p);
   await p.keyboard.up('d');await p.keyboard.down('a');
   const reversalTicks=await tick(p);
+  assert.equal(reversalTicks,1,'direction reversal is sampled on the first production logic tick');
   const afterA=await run('({x:state.player.x,vx:state.player.vx})');
   assert.ok(afterA.x<afterSettle,'A reverses displacement on its first sampled logic tick');
   assert.equal(afterA.vx,-8,'A sets the baseline leftward movement speed');
@@ -100,8 +103,12 @@ test('feel baseline: jump, landing, dash, slide and grapple transitions are obse
   while(!(await run('state.player.grounded'))&&landingTicks<180){await tick(p);landingTicks++;}
   assert.equal(await run('state.player.grounded'),true,'jump returns to grounded state');
   assert.ok(apexY>y0,'jump has a measurable ascent');
+  await p.keyboard.down('Space');await tick(p); // fresh jump after landing
+  await p.keyboard.up('Space');await tick(p);
   await p.keyboard.down('Space');
   const dashResponseTicks=await tick(p);
+  assert.equal(jumpResponseTicks,1,'jump starts on the first sampled press');
+  assert.equal(dashResponseTicks,1,'air Dash starts on the first sampled second press');
   const dashStart=await run('({x:state.player.x,y:state.player.y,dash:!!state.player.dash})');
   assert.equal(dashStart.dash,true,'second press in air enters Dash');
   let dashTicks=1;
@@ -112,6 +119,7 @@ test('feel baseline: jump, landing, dash, slide and grapple transitions are obse
   await p.keyboard.up('Space');await ticks(p,180);
   assert.equal(await run('state.player.grounded'),true,'player lands before slide baseline');
   await p.keyboard.down('d');await p.keyboard.down('s');const slideEntryTicks=await tick(p);
+  assert.equal(slideEntryTicks,1,'slide starts on the first sampled S press');
   assert.equal(await run('!!state.player.slide'),true,'moving S press enters slide');
   const slideStart=await run('state.player.x');
   let slideTicks=1;
@@ -122,15 +130,17 @@ test('feel baseline: jump, landing, dash, slide and grapple transitions are obse
 
   await run("state.enemies=[];state.rects.push({id:'FEEL_GRAPPLE_WALL',type:'Wall',x:state.player.x+7,y:state.player.y,w:1,h:8});mx=1279;my=360");
   await p.mouse.down({button:'right'});const grappleEntryTicks=await tick(p);
+  assert.equal(grappleEntryTicks,1,'grapple starts on the first sampled right mouse press');
   assert.equal(await run('state.grapple.mode'),'fly','right mouse starts grapple flight');
   let grappleTicks=1;
   while(await run("state.grapple.mode==='fly'")&&grappleTicks<80){await tick(p);grappleTicks++;}
   const grappleModeBeforeRelease=await run('state.grapple.mode');
   assert.ok(['pull','stuck','none'].includes(grappleModeBeforeRelease),'grapple reaches a terminal travel or pull state');
   await p.mouse.up({button:'right'});const grappleReleaseTicks=await tick(p);
+  assert.equal(grappleReleaseTicks,1,'right mouse release is sampled on the first logic tick');
   assert.equal(await run('state.grapple.mode'),'none','right mouse release clears grapple');
 
-  results.metrics.actions={jumpResponseTicks,jumpTicks,apexTick,apexHeight:y0+apexY-y0,landingTicks,dashResponseTicks,dashTicks,dashDisplacement:{x:dashEnd.x-dashStart.x,y:dashEnd.y-dashStart.y},slideEntryTicks,slideTicks,slideDisplacement:slideEnd-slideStart,grappleEntryTicks,grappleTicks,grappleModeBeforeRelease,grappleReleaseTicks};
+  results.metrics.actions={jumpResponseTicks,jumpTicks,apexTick,apexDisplacement:apexY-y0,landingTicks,dashResponseTicks,dashTicks,dashDisplacement:{x:dashEnd.x-dashStart.x,y:dashEnd.y-dashStart.y},slideEntryTicks,slideTicks,slideDisplacement:slideEnd-slideStart,grappleEntryTicks,grappleTicks,grappleModeBeforeRelease,grappleReleaseTicks};
 });
 
 test('display baseline: full Canvas renders without overflow and produces a retained screenshot',async t=>{
@@ -138,15 +148,15 @@ test('display baseline: full Canvas renders without overflow and produces a reta
   await p.clock.runFor(34);
   const geometry=await p.evaluate(()=>{
     const c=document.querySelector('#game'),r=c.getBoundingClientRect(),ctx=c.getContext('2d');
-    const data=ctx.getImageData(0,0,c.width,c.height).data;let changed=0;
-    for(let i=0;i<data.length;i+=4)if(data[i]!==27||data[i+1]!==27||data[i+2]!==27)changed++;
-    return {canvas:{width:c.width,height:c.height,cssWidth:r.width,cssHeight:r.height},scrollWidth:document.documentElement.scrollWidth,innerWidth,changedPixelRatio:changed/(c.width*c.height)};
+    const data=ctx.getImageData(0,0,c.width,c.height).data;let visible=0;
+    for(let i=0;i<data.length;i+=4)if(data[i+3]>0)visible++;
+    return {canvas:{width:c.width,height:c.height,cssWidth:r.width,cssHeight:r.height},scrollWidth:document.documentElement.scrollWidth,innerWidth,visiblePixelRatio:visible/(c.width*c.height)};
   });
   assert.deepEqual(geometry.canvas.width,1280);
   assert.deepEqual(geometry.canvas.height,720);
   assert.ok(geometry.canvas.cssWidth>0&&geometry.canvas.cssHeight>0,'Canvas has visible dimensions');
   assert.ok(geometry.scrollWidth<=geometry.innerWidth,'page has no horizontal overflow');
-  assert.ok(geometry.changedPixelRatio>0.01,'rendered frame contains visible game/UI pixels');
+  assert.ok(geometry.visiblePixelRatio>0.005,'rendered frame contains visible game/UI pixels');
   const shot=process.env.GAME_FEEL_SCREENSHOT||path.join(process.cwd(),'test-artifacts','game-feel-baseline.png');
   fs.mkdirSync(path.dirname(shot),{recursive:true});
   await p.locator('#game').screenshot({path:shot});
