@@ -8,7 +8,7 @@ const path=require('node:path');
 const {chromium}=require('playwright');
 
 let browser,server,base;
-const results={build:'original-main-baseline',viewport:{width:1280,height:800},metrics:{}};
+const results={build:process.env.GAME_FEEL_BUILD||'original-main-baseline',viewport:{width:1280,height:800},metrics:{}};
 
 before(async()=>{
   const root=path.join(__dirname,'../docs');
