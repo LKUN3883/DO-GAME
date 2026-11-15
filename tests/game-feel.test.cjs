@@ -41,6 +41,7 @@ async function openGame(t){
   await p.goto(base);
   await p.waitForFunction(()=>window.__test?.run('state!==null'));
   const run=code=>p.evaluate(code=>window.__test.run(code),code);
+  await run('state.enemies=[]');
   await p.clock.runFor(1000);
   return {p,run};
 }
@@ -72,17 +73,19 @@ test('feel baseline: A/D response, release drift, and reversal are measured in l
   await ticks(p,6);
   const afterSettle=await run('state.player.x');
   const releaseDrift=afterSettle-atRelease.x;
+  const stopDistanceAfterReleaseEvent=afterSettle-afterD.x;
   assert.equal(atRelease.vx,0,'keyup clears grounded horizontal velocity on the sampling tick');
   assert.ok(Math.abs(releaseDrift)<1e-8,'position does not continue accumulating after keyup is sampled');
 
   await p.keyboard.down('d');await tick(p);
   await p.keyboard.up('d');await p.keyboard.down('a');
+  const reversalStart=await run('state.player.x');
   const reversalTicks=await tick(p);
   assert.equal(reversalTicks,1,'direction reversal is sampled on the first production logic tick');
   const afterA=await run('({x:state.player.x,vx:state.player.vx})');
-  assert.ok(afterA.x<afterSettle,'A reverses displacement on its first sampled logic tick');
+  assert.ok(afterA.x<reversalStart,'A reverses displacement on its first sampled logic tick');
   assert.equal(afterA.vx,-8,'A sets the baseline leftward movement speed');
-  results.metrics.horizontal={responseTicks,responseDisplacement:afterD.x-start.x,responseVelocity:afterD.vx,releaseTicks,postSampleDrift:releaseDrift,reversalTicks,reversalVelocity:afterA.vx,worldUnitsPerSecond:8};
+  results.metrics.horizontal={responseTicks,responseDisplacement:afterD.x-start.x,responseVelocity:afterD.vx,releaseTicks,postSampleDrift:releaseDrift,stopDistanceAfterReleaseEvent,reversalTicks,reversalDisplacement:afterA.x-reversalStart,reversalVelocity:afterA.vx,worldUnitsPerSecond:8};
 });
 
 test('feel baseline: jump, landing, dash, slide and grapple transitions are observable',async t=>{
@@ -105,6 +108,7 @@ test('feel baseline: jump, landing, dash, slide and grapple transitions are obse
   assert.ok(apexY>y0,'jump has a measurable ascent');
   await p.keyboard.down('Space');await tick(p); // fresh jump after landing
   await p.keyboard.up('Space');await tick(p);
+  const dashOrigin=await run('({x:state.player.x,y:state.player.y})');
   await p.keyboard.down('Space');
   const dashResponseTicks=await tick(p);
   assert.equal(jumpResponseTicks,1,'jump starts on the first sampled press');
@@ -140,7 +144,7 @@ test('feel baseline: jump, landing, dash, slide and grapple transitions are obse
   assert.equal(grappleReleaseTicks,1,'right mouse release is sampled on the first logic tick');
   assert.equal(await run('state.grapple.mode'),'none','right mouse release clears grapple');
 
-  results.metrics.actions={jumpResponseTicks,jumpTicks,apexTick,apexDisplacement:apexY-y0,landingTicks,dashResponseTicks,dashTicks,dashDisplacement:{x:dashEnd.x-dashStart.x,y:dashEnd.y-dashStart.y},slideEntryTicks,slideTicks,slideDisplacement:slideEnd-slideStart,grappleEntryTicks,grappleTicks,grappleModeBeforeRelease,grappleReleaseTicks};
+  results.metrics.actions={jumpResponseTicks,jumpTicks,apexTick,apexDisplacement:apexY-y0,landingTicks,dashResponseTicks,dashTicks,dashDisplacement:{x:dashEnd.x-dashOrigin.x,y:dashEnd.y-dashOrigin.y},slideEntryTicks,slideTicks,slideDisplacement:slideEnd-slideStart,grappleEntryTicks,grappleTicks,grappleModeBeforeRelease,grappleReleaseTicks};
 });
 
 test('display baseline: full Canvas renders without overflow and produces a retained screenshot',async t=>{
