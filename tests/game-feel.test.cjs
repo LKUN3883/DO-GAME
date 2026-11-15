@@ -180,6 +180,34 @@ test('feel baseline: collision blocks movement without sticking input, and blur 
   results.metrics.blocking={wallPreventsCrossing:true,inputResumesAfterWallRemoval:true,blurVelocity:blurStop.vx,postBlurDrift:blurSettled-blurStop.x};
 });
 
+test('melee visual experiment: pressing F draws an immediate slash without changing damage rules',async t=>{
+  const {p,run}=await openGame(t);
+  await p.keyboard.down('f');
+  await tick(p);
+  await p.keyboard.up('f');
+  const measured=await run(`(() => {
+    const melee=state.player.melee;
+    const health=state.player.hp;
+    const position={x:state.player.x,y:state.player.y};
+    const originalArc=ctx.arc;
+    const arcs=[];
+    ctx.arc=function(...args){arcs.push(args);return originalArc.apply(this,args);};
+    try {render();} finally {ctx.arc=originalArc;}
+    return {meleeActive:!!melee,remaining:melee?.t,arcs:arcs.length,
+      radius:arcs[0]?.[2],health,position};
+  })()`);
+  assert.ok(measured.meleeActive,'F creates the original melee state');
+  assert.ok(measured.arcs>=3,'melee visibly draws layered white slash arcs on its first sampled logic tick');
+  assert.ok(measured.radius>=80 && measured.radius<=110,'slash radius is within the intended on-screen range');
+  const screenshot=path.join(process.cwd(),'test-artifacts','melee-slash-feedback.png');
+  fs.mkdirSync(path.dirname(screenshot),{recursive:true});
+  await p.locator('#game').screenshot({path:screenshot});
+  const after=await run('({hp:state.player.hp,x:state.player.x,y:state.player.y})');
+  assert.equal(after.hp,measured.health,'render-only melee slash does not change player health');
+  assert.deepEqual({x:after.x,y:after.y},measured.position,'render-only melee slash does not move the player');
+  results.metrics.meleeVisual={firstTickVisible:true,arcLayers:measured.arcs,screenshot};
+});
+
 test('display baseline: full Canvas renders without overflow and produces a retained screenshot',async t=>{
   const {p,run}=await openGame(t);
   await p.clock.runFor(34);
