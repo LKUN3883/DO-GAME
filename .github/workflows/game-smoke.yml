@@ -55,6 +55,11 @@ jobs:
       - run: npm run test:browser
         env:
           BROWSER_SCREENSHOT: test-artifacts/boss-room.png
+      - name: Game feel baseline and display regression
+        run: node --test tests/game-feel.test.cjs
+        env:
+          GAME_FEEL_RESULTS: test-artifacts/game-feel-baseline.json
+          GAME_FEEL_SCREENSHOT: test-artifacts/game-feel-baseline.png
       - run: npm run test:browser:grapple
         if: ${{ !cancelled() }}
       - run: npm run test:playthrough
@@ -65,5 +70,6 @@ jobs:
           name: chromium-acceptance-${{ matrix.os }}
           path: |
             test-artifacts/*.png
+            test-artifacts/*.json
             browser-results/
           if-no-files-found: warn
