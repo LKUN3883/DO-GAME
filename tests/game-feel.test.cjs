@@ -151,6 +151,35 @@ test('feel baseline: jump, landing, dash, slide and grapple transitions are obse
   results.metrics.actions={jumpResponseTicks,jumpTicks,apexTick,apexDisplacement:apexY-y0,landingTicks,dashResponseTicks,dashTicks,dashDisplacement:{x:dashEnd.x-dashOrigin.x,y:dashEnd.y-dashOrigin.y},slideEntryTicks,slideReverseTicks,slideTicks,slideDisplacement:slideEnd-slideStart,grappleEntryTicks,grappleTicks,grappleModeBeforeRelease,grappleReleaseTicks};
 });
 
+
+test('feel baseline: collision blocks movement without sticking input, and blur clears held input',async t=>{
+  const {p,run}=await openGame(t);
+  const startX=await run('state.player.x');
+  await run("state.rects.push({id:'FEEL_BLOCK_TEST',type:'Wall',x:7,y:state.player.y,w:1,h:4})");
+  await p.keyboard.down('d');await ticks(p,6);
+  const blocked=await run('({x:state.player.x,vx:state.player.vx,overlap:blockers().some(r=>penetrates(aabb(state.player),aabb(r)))})');
+  assert.ok(Math.abs(blocked.x-startX)<0.01,'wall collision prevents crossing the wall');
+  assert.equal(blocked.vx,0,'collision clears movement velocity');
+  assert.equal(blocked.overlap,false,'collision leaves no terrain penetration');
+  await run("state.rects=state.rects.filter(r=>r.id!=='FEEL_BLOCK_TEST')");
+  await tick(p);
+  const resumedX=await run('state.player.x');
+  assert.ok(resumedX>blocked.x,'held direction is accepted after the blocking wall is removed');
+  await p.keyboard.up('d');await tick(p);
+
+  await run('resetAll();state.enemies=[]');
+  await ticks(p,60);
+  await p.keyboard.down('d');await tick(p);
+  await p.evaluate(()=>window.dispatchEvent(new Event('blur')));
+  await tick(p);
+  const blurStop=await run('({x:state.player.x,vx:state.player.vx})');
+  await ticks(p,6);
+  const blurSettled=await run('state.player.x');
+  assert.equal(blurStop.vx,0,'blur clears held horizontal input');
+  assert.ok(Math.abs(blurSettled-blurStop.x)<1e-8,'movement stays stopped after blur');
+  results.metrics.blocking={wallPreventsCrossing:true,inputResumesAfterWallRemoval:true,blurVelocity:blurStop.vx,postBlurDrift:blurSettled-blurStop.x};
+});
+
 test('display baseline: full Canvas renders without overflow and produces a retained screenshot',async t=>{
   const {p,run}=await openGame(t);
   await p.clock.runFor(34);
