@@ -729,6 +729,43 @@ function updateCamera() {
   state.cam.x=nx;state.cam.y=ny;
 }
 
+// Experimental visual-only melee cue. It reads the existing melee timer without
+// changing hit detection, stamina, cooldowns, or any simulation values.
+function renderMeleeSlash(toScreen) {
+  const p=state.player;
+  if(!p.melee)return;
+  const elapsed=clamp(1-p.melee.t,0,1);
+  const duration=0.28;
+  if(elapsed>=duration)return;
+  const progress=elapsed/duration;
+  const opacity=(1-progress)*Math.min(1,(elapsed+DT)/0.045);
+  const aim=playerAimDir();
+  const heading=Math.atan2(-aim.y,aim.x);
+  const pos=toScreen(p.x,p.y);
+  const radius=2.35*PX_PER_CM;
+  const start=heading-1.65+progress*1.65;
+  const end=start+Math.PI*0.68;
+  ctx.save();
+  ctx.lineCap='round';
+  ctx.shadowColor='#b3f7ff';
+  ctx.shadowBlur=16;
+  ctx.strokeStyle='#64d9ff';
+  ctx.globalAlpha=0.24*opacity;
+  ctx.lineWidth=24;
+  ctx.beginPath();ctx.arc(pos.x,pos.y,radius,start,end);ctx.stroke();
+  ctx.shadowBlur=7;
+  ctx.strokeStyle='#c2f5ff';
+  ctx.globalAlpha=0.73*opacity;
+  ctx.lineWidth=10;
+  ctx.beginPath();ctx.arc(pos.x,pos.y,radius,start,end);ctx.stroke();
+  ctx.shadowBlur=0;
+  ctx.strokeStyle='#fff';
+  ctx.globalAlpha=opacity;
+  ctx.lineWidth=3.5;
+  ctx.beginPath();ctx.arc(pos.x,pos.y,radius,start,end);ctx.stroke();
+  ctx.restore();
+}
+
 function render() {
   ctx.clearRect(0,0,canvas.width,canvas.height);
   const toScreen=(x,y)=>({x:(x-(state.cam.x-VIEW_HW))*PX_PER_CM,y:(state.cam.y+VIEW_HH-y)*PX_PER_CM});
@@ -744,6 +781,7 @@ function render() {
   if (b.active && b.alive && !b.dead && bossVisible) drawRect(b,'rgba(255,200,80,0.8627450980392157)');
   for (const p of state.projectiles) drawRect(p,p.owner==='player'?'rgba(235,235,235,1)':(p.w<0.2?'rgba(220,180,255,1)':'rgba(255,240,160,1)'));
   drawRect(state.player,'rgba(80,180,255,0.8627450980392157)');
+  renderMeleeSlash(toScreen);
   const g=state.grapple;
   if (g.head && !g.end) {
     const from=toScreen(state.player.x,state.player.y),to=toScreen(g.head.x,g.head.y);
