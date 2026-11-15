@@ -126,11 +126,15 @@ test('feel baseline: jump, landing, dash, slide and grapple transitions are obse
   assert.equal(slideEntryTicks,1,'slide starts on the first sampled S press');
   assert.equal(await run('!!state.player.slide'),true,'moving S press enters slide');
   const slideStart=await run('state.player.x');
+  await p.keyboard.up('d');await p.keyboard.down('a');const slideReverseTicks=await tick(p);
+  assert.equal(slideReverseTicks,1,'opposite input is sampled during slide');
+  assert.equal(await run('state.player.slide.dir'),1,'slide state retains its starting direction');
+  assert.ok(await run('state.player.vx')>0,'opposite input does not reverse slide velocity');
   let slideTicks=1;
   while((await run('!!state.player.slide'))&&slideTicks<70){await tick(p);slideTicks++;}
   assert.equal(await run('!!state.player.slide'),false,'slide exits');
   const slideEnd=await run('state.player.x');
-  await p.keyboard.up('d');await p.keyboard.up('s');await tick(p);
+  await p.keyboard.up('a');await p.keyboard.up('s');await tick(p);
 
   await run("state.enemies=[];state.rects.push({id:'FEEL_GRAPPLE_WALL',type:'Wall',x:state.player.x+7,y:state.player.y,w:1,h:8});mx=1279;my=360");
   await p.mouse.down({button:'right'});const grappleEntryTicks=await tick(p);
@@ -144,7 +148,7 @@ test('feel baseline: jump, landing, dash, slide and grapple transitions are obse
   assert.equal(grappleReleaseTicks,1,'right mouse release is sampled on the first logic tick');
   assert.equal(await run('state.grapple.mode'),'none','right mouse release clears grapple');
 
-  results.metrics.actions={jumpResponseTicks,jumpTicks,apexTick,apexDisplacement:apexY-y0,landingTicks,dashResponseTicks,dashTicks,dashDisplacement:{x:dashEnd.x-dashOrigin.x,y:dashEnd.y-dashOrigin.y},slideEntryTicks,slideTicks,slideDisplacement:slideEnd-slideStart,grappleEntryTicks,grappleTicks,grappleModeBeforeRelease,grappleReleaseTicks};
+  results.metrics.actions={jumpResponseTicks,jumpTicks,apexTick,apexDisplacement:apexY-y0,landingTicks,dashResponseTicks,dashTicks,dashDisplacement:{x:dashEnd.x-dashOrigin.x,y:dashEnd.y-dashOrigin.y},slideEntryTicks,slideReverseTicks,slideTicks,slideDisplacement:slideEnd-slideStart,grappleEntryTicks,grappleTicks,grappleModeBeforeRelease,grappleReleaseTicks};
 });
 
 test('display baseline: full Canvas renders without overflow and produces a retained screenshot',async t=>{
