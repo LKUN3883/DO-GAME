@@ -1,7 +1,7 @@
 const DT = 1 / 60;
 // Experimental opt-in only: use #grapple-momentum in the page URL.
 // The default main-compatible rules remain unchanged when the hash is absent.
-const grappleMomentumEnabled = () => location.hash === '#grapple-momentum';
+const grappleMomentumEnabled = () => typeof location !== 'undefined' && location.hash === '#grapple-momentum';
 const EPS = 0.001;
 const PX_PER_CM = 40;
 const VIEW_W = 32;
