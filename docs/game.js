@@ -372,14 +372,17 @@ function updateLogic() {
     p.dash.left -= step;
     if (p.dash.left<=EPS || blocked) { p.dash=null; p.vx=0; p.vy=0; }
   } else {
-    if(p.slide_jump && !p.grounded) {
-      // Preserve the exact slide launch speed, then blend into normal air steering.
+    if(p.slide_jump && (jumpedThisFrame || !p.grounded)) {
+      // Preserve the exact launch speed on the jump tick, then blend into air steering.
       // The 0.18 s handoff is experimental tuning, not a mainline blueprint change.
-      p.slide_jump.t+=DT;
-      const blend=clamp(p.slide_jump.t/0.18,0,1);
-      const desired=input_x*8;
-      p.vx=p.slide_jump.vx+(desired-p.slide_jump.vx)*blend;
-      if(blend>=1)p.slide_jump=null;
+      if(jumpedThisFrame) p.vx=p.slide_jump.vx;
+      else {
+        p.slide_jump.t+=DT;
+        const blend=clamp(p.slide_jump.t/0.18,0,1);
+        const desired=input_x*8;
+        p.vx=p.slide_jump.vx+(desired-p.slide_jump.vx)*blend;
+        if(blend>=1)p.slide_jump=null;
+      }
     } else if (p.slide) {
       p.slide.t=(p.slide.frames??Math.round(p.slide.t/DT))*DT;
       p.vx=p.slide.dir*Math.max(0,10-(10/0.9)*p.slide.t);
