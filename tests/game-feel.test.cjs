@@ -198,11 +198,17 @@ test('opt-in slide jump preserves launch speed and blends into air steering',asy
   await tick(p);
   const steer=await run('state.player.vx');
   assert.ok(steer<launch.vx && steer>0,'opposite direction gradually steers instead of snapping');
+  await p.keyboard.up('a');await p.keyboard.down('d');await tick(p);
+  const switchedD=await run('state.player.vx');
+  assert.ok(Math.abs(switchedD-steer)<=1.500001,'A-to-D switch is acceleration-limited');
+  await p.keyboard.up('d');await p.keyboard.down('a');await tick(p);
+  const switchedA=await run('state.player.vx');
+  assert.ok(Math.abs(switchedA-switchedD)<=1.500001,'D-to-A switch is acceleration-limited');
   await ticks(p,12);
   const turned=await run('({vx:state.player.vx,grounded:state.player.grounded,carry:state.player.slide_jump})');
   assert.ok(turned.vx<0,'sustained opposite input can reverse the airborne direction');
   assert.equal(turned.grounded,false,'the player remains airborne during the handoff');
-  assert.equal(turned.carry,null,'handoff ends after its blend interval');
+  assert.ok(turned.carry,'momentum control remains active for the airborne action');
   await p.keyboard.up('a');
   results.metrics.slideJumpMomentum={launchVx:launch.vx,firstOppositeSteerVx:steer,reversedVx:turned.vx,exactInitialSpeed:true};
 });
@@ -275,8 +281,8 @@ test('opt-in slide-jump handoff settles after blur and respawn clears it immedia
   await ticks(p,12);
   const blurred=await run("({carry:state.player.slide_jump,vx:state.player.vx,raw:keyRaw.size})");
   assert.equal(blurred.raw,0,'blur releases held movement input');
-  assert.equal(blurred.carry,null,'handoff completes after blur with neutral input');
-  assert.equal(blurred.vx,0,'blurred neutral input does not revive launch velocity');
+  assert.ok(blurred.carry,'airborne momentum state remains valid after blur');
+  assert.ok(blurred.vx>8 && blurred.vx<10,'neutral air drag reduces velocity gradually instead of snapping to zero');
 
   await run("Object.assign(state.player,{x:50,y:0,hp:0,vx:10,vy:0,grounded:false,slide_jump:{vx:10,dir:1,t:0},dash:null})");
   await tick(p);
