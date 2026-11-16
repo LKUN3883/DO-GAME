@@ -207,6 +207,89 @@ test('opt-in slide jump preserves launch speed and blends into air steering',asy
   results.metrics.slideJumpMomentum={launchVx:launch.vx,firstOppositeSteerVx:steer,reversedVx:turned.vx,exactInitialSpeed:true};
 });
 
+
+test('opt-in slide jump hands off to air Dash without restoring launch speed and lands cleanly',async t=>{
+  const {p,run}=await openGame(t);
+  await run("location.hash='#slide-jump-momentum';state.enemies=[];state.projectiles=[];keyRaw.clear();mx=1279;my=360");
+  await p.keyboard.down('d');await p.keyboard.down('s');await tick(p);
+  const sliding=await run("({slide:state.player.slide,vx:state.player.vx,grounded:state.player.grounded})");
+  assert.ok(sliding.slide,'real D+S input enters slide');
+  assert.equal(sliding.grounded,true);
+  assert.ok(sliding.vx>=9.9,'slide has its forward launch velocity');
+
+  await p.keyboard.down('Space');await tick(p);await p.keyboard.up('Space');
+  const launched=await run("({slide:state.player.slide,carry:state.player.slide_jump,vx:state.player.vx,vy:state.player.vy,grounded:state.player.grounded})");
+  assert.equal(launched.slide,null,'jump exits slide');
+  assert.ok(launched.carry,'jump starts the momentum handoff');
+  assert.ok(launched.vy>0&&!launched.grounded,'jump launches into the air');
+  assert.ok(Math.abs(launched.vx-sliding.vx)<1e-8,'jump preserves the measured slide speed');
+
+  await p.keyboard.up('d');await p.keyboard.down('Space');await tick(p);
+  const dashStart=await run("({dash:state.player.dash,carry:state.player.slide_jump,vx:state.player.vx})");
+  assert.ok(dashStart.dash,'second Space press starts air Dash before handoff expires');
+  assert.equal(dashStart.carry,null,'Dash takeover clears the old slide-jump handoff');
+  await p.keyboard.up('Space');
+  let dashTicks=1;
+  while(await run('!!state.player.dash')&&dashTicks<20){await tick(p);dashTicks++;}
+  assert.equal(await run('!!state.player.dash'),false,'Dash completes');
+  const dashEnd=await run("({vx:state.player.vx,carry:state.player.slide_jump,grounded:state.player.grounded})");
+  assert.equal(dashEnd.carry,null,'old slide-jump state does not resume after Dash');
+  assert.equal(dashEnd.vx,0,'neutral input leaves no resurrected horizontal launch speed');
+  let landingTicks=0;
+  while(!(await run('state.player.grounded'))&&landingTicks<180){await tick(p);landingTicks++;}
+  const landed=await run("({grounded:state.player.grounded,carry:state.player.slide_jump,dashUsed:state.player.dash_used,vx:state.player.vx})");
+  assert.equal(landed.grounded,true,'player lands naturally after the action chain');
+  assert.equal(landed.carry,null,'landing leaves no slide-jump handoff state');
+  assert.equal(landed.dashUsed,false,'ground contact restores Dash availability');
+  assert.equal(landed.vx,0,'neutral ground movement resumes without stale momentum');
+  results.metrics.slideJumpDash={slideVx:sliding.vx,jumpVx:launched.vx,dashTicks,landingTicks,postDashVx:dashEnd.vx,carryCleared:true};
+});
+
+test('opt-in slide-jump handoff is cleared when grapple pull takes over',async t=>{
+  const {p,run}=await openGame(t);
+  await run("location.hash='#slide-jump-momentum';keyRaw.clear();state.enemies=[];state.projectiles=[];state.rects=[{id:'HANDOFF_ANCHOR',type:'Wall',x:12.5,y:-20,w:1,h:8}];" +
+    "Object.assign(state.player,{x:10,y:-20,vx:10,vy:0,w:1,h:2,grounded:false,slide:null,slide_jump:{vx:10,dir:1,t:2*DT},dash:null,dash_used:false,jump_ascend:true,respawn_lock:0});" +
+    "state.cam={x:10,y:-20};mx=1279;my=360");
+  await p.mouse.down({button:'right'});
+  let travelTicks=0;
+  while(await run("state.grapple.mode==='none'||state.grapple.mode==='fly'")){
+    await tick(p);travelTicks++;
+    if(travelTicks>=12)break;
+  }
+  const pulled=await run("({mode:state.grapple.mode,carry:state.player.slide_jump})");
+  assert.equal(pulled.mode,'pull','grapple reaches and takes over at the wall anchor');
+  assert.equal(pulled.carry,null,'grapple takeover clears slide-jump handoff');
+  await p.mouse.up({button:'right'});await tick(p);
+  const released=await run("({mode:state.grapple.mode,carry:state.player.slide_jump,vx:state.player.vx})");
+  assert.equal(released.mode,'none','releasing grapple exits pull');
+  assert.equal(released.carry,null,'released grapple does not restore old slide-jump state');
+  results.metrics.grappleTakeover={travelTicks,modeAtTakeover:pulled.mode,carryCleared:true,modeAfterRelease:released.mode};
+});
+
+test('opt-in slide-jump handoff settles after blur and respawn clears it immediately',async t=>{
+  const {p,run}=await openGame(t);
+  await run("location.hash='#slide-jump-momentum';keyRaw.clear();state.rects=[];state.enemies=[];state.projectiles=[];" +
+    "Object.assign(state.player,{x:50,y:0,vx:10,vy:10,w:1,h:2,grounded:false,slide:null,slide_jump:{vx:10,dir:1,t:0},dash:null,dash_used:false,jump_ascend:false,respawn_lock:0});" +
+    "keyRaw.set('KeyD',true)");
+  await p.evaluate(()=>window.dispatchEvent(new Event('blur')));
+  await ticks(p,12);
+  const blurred=await run("({carry:state.player.slide_jump,vx:state.player.vx,raw:keyRaw.size})");
+  assert.equal(blurred.raw,0,'blur releases held movement input');
+  assert.equal(blurred.carry,null,'handoff completes after blur with neutral input');
+  assert.equal(blurred.vx,0,'blurred neutral input does not revive launch velocity');
+
+  await run("Object.assign(state.player,{x:50,y:0,hp:0,vx:10,vy:0,grounded:false,slide_jump:{vx:10,dir:1,t:0},dash:null})");
+  await tick(p);
+  const respawned=await run("({hp:state.player.hp,carry:state.player.slide_jump,dash:state.player.dash,slide:state.player.slide,grounded:state.player.grounded,lock:state.player.respawn_lock})");
+  assert.equal(respawned.hp,100,'death restores player health');
+  assert.equal(respawned.carry,null,'respawn immediately clears slide-jump handoff');
+  assert.equal(respawned.dash,null,'respawn clears Dash');
+  assert.equal(respawned.slide,null,'respawn clears slide');
+  assert.equal(respawned.grounded,false,'respawn leaves physics to reacquire ground');
+  assert.ok(respawned.lock>0,'respawn retains the input lock');
+  results.metrics.blurRespawn={blurCarryCleared:true,blurVelocity:blurred.vx,respawnCarryCleared:true,respawnLock:respawned.lock};
+});
+
 test('display baseline: full Canvas renders without overflow and produces a retained screenshot',async t=>{
   const {p,run}=await openGame(t);
   await p.clock.runFor(34);

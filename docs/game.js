@@ -201,7 +201,7 @@ function updateGrapple() {
     if (group===characters) g.local={x:g.anchor.x-target.x,y:g.anchor.y-target.y};
     g.mode='pull'; h.x=g.anchor.x; h.y=g.anchor.y; h.vx=0; h.vy=0;
     // Pull overrides ongoing aerial movement; no suspended Dash/ascent resumes later.
-    state.player.dash=null; state.player.jump_ascend=false;
+    state.player.dash=null; state.player.jump_ascend=false; state.player.slide_jump=null;
     if (Math.hypot(g.anchor.x-state.player.x,g.anchor.y-state.player.y)<=0.8+EPS) endGrapple();
     return;
   }
@@ -348,7 +348,7 @@ function updateLogic() {
   if (p.jump_ascend) { p.jump_t+=DT; if (p.jump_t>0.3||p.vy<=0) p.jump_ascend=false; }
 
   if (!jumpedThisFrame && !p.grounded && !p.dash && !pulling && input.Jump.just_pressed && !p.dash_used) {
-    if (p.st>=30) { p.st-=30; p.dash_used=true; p.dash={dir:aim,left:6}; p.vx=0; p.vy=0; }
+    if (p.st>=30) { p.st-=30; p.dash_used=true; p.dash={dir:aim,left:6}; p.slide_jump=null; p.vx=0; p.vy=0; }
     else { state.hint={text:'体力不足',t:0.5}; }
   }
 
