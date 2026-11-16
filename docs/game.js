@@ -1,4 +1,7 @@
 const DT = 1 / 60;
+// Experimental opt-in only: use #grapple-momentum in the page URL.
+// The default main-compatible rules remain unchanged when the hash is absent.
+const grappleMomentumEnabled = () => location.hash === '#grapple-momentum';
 const EPS = 0.001;
 const PX_PER_CM = 40;
 const VIEW_W = 32;
@@ -81,7 +84,7 @@ function resetAll() {
   const enemies = [...level.enemies].sort((a,b)=>idCompare(a.id,b.id)).map(e=>({ ...e, alive:true, discovered:false, exclaim_t:0, grounded:false, vx:0, vy:0, melee_cd:0, shoot_cd:0 }));
   state = {
     game_state:'RUN',
-    player:{x:p.x,y:p.y,vx:0,vy:0,w:1,h:2,facing:p.facing,grounded:false,standing_oneway_id:'',ignore_oneway_id:'',ignore_timer:0,hp:100,st:100,ammo:60,iframe:0,dash_used:false,dash:null,jump_t:0,jump_ascend:false,crouch:false,slide:null,melee:null,respawn_lock:0},
+    player:{x:p.x,y:p.y,vx:0,vy:0,w:1,h:2,facing:p.facing,grounded:false,standing_oneway_id:'',ignore_oneway_id:'',ignore_timer:0,hp:100,st:100,ammo:60,iframe:0,dash_used:false,dash:null,jump_t:0,jump_ascend:false,crouch:false,slide:null,melee:null,respawn_lock:0,grapple_inertia:false},
     boss:{...level.boss, alive:true, hp:420, vx:0, vy:0, grounded:false, active:false, dead:false, death_t:0, phase:'rifle', phase_t:2, shoot_cd:0, shot_count:0, charge_t:0, charge_pending:false, warning_t:0, charge:null},
     rects, enemies, projectiles:[], spawn_seq:0,
     grapple:emptyGrapple(),
@@ -136,10 +139,16 @@ function grapplePulling() {
   const g=state.grapple;
   return !g.end && (g.mode==='pull' || g.mode==='stuck');
 }
-function endGrapple() {
-  // Stop its effects now; remove the head/state in the cleanup stage (21.1.12).
-  state.grapple.end=true;
-  state.player.vx=0; state.player.vy=0;
+function endGrapple(reason='') {
+  // Only a deliberate mid-air release from active pull can inherit momentum.
+  // Stuck, target death, flight timeout and default gameplay keep old behavior.
+  const g=state.grapple,p=state.player;
+  if(g.end)return;
+  const carry=grappleMomentumEnabled() && reason==='release' &&
+    g.mode==='pull' && !p.grounded && p.respawn_lock===0;
+  g.end=true;
+  p.grapple_inertia=carry;
+  if(!carry){p.vx=0;p.vy=0;}
 }
 function spawnGrapple(aim) {
   const p=state.player;
@@ -198,6 +207,7 @@ function updateGrapple() {
     g.anchor={x:clamp(h.x,box.min_x,box.max_x),y:clamp(h.y,box.min_y,box.max_y)};
     if (group===characters) g.local={x:g.anchor.x-target.x,y:g.anchor.y-target.y};
     g.mode='pull'; h.x=g.anchor.x; h.y=g.anchor.y; h.vx=0; h.vy=0;
+    state.player.grapple_inertia=false;
     // Pull overrides ongoing aerial movement; no suspended Dash/ascent resumes later.
     state.player.dash=null; state.player.jump_ascend=false;
     if (Math.hypot(g.anchor.x-state.player.x,g.anchor.y-state.player.y)<=0.8+EPS) endGrapple();
@@ -330,7 +340,7 @@ function updateLogic() {
   if (input_x!==0) p.facing=input_x;
   const aim = playerAimDir();
 
-  if (input.RMB.just_released && state.grapple.mode!=='none') endGrapple();
+  if (input.RMB.just_released && state.grapple.mode!=='none') endGrapple('release');
   const pulling=grapplePulling();
 
   const downThrough = !pulling && p.grounded && p.standing_oneway_id && input.S.down && input.Jump.just_pressed;
@@ -342,7 +352,7 @@ function updateLogic() {
   if (p.jump_ascend) { p.jump_t+=DT; if (p.jump_t>0.3||p.vy<=0) p.jump_ascend=false; }
 
   if (!jumpedThisFrame && !p.grounded && !p.dash && !pulling && input.Jump.just_pressed && !p.dash_used) {
-    if (p.st>=30) { p.st-=30; p.dash_used=true; p.dash={dir:aim,left:6}; p.vx=0; p.vy=0; }
+    if (p.st>=30) { p.st-=30; p.dash_used=true; p.dash={dir:aim,left:6}; p.grapple_inertia=false; p.vx=0; p.vy=0; }
     else { state.hint={text:'体力不足',t:0.5}; }
   }
 
@@ -369,6 +379,12 @@ function updateLogic() {
     if (p.slide) {
       p.slide.t=(p.slide.frames??Math.round(p.slide.t/DT))*DT;
       p.vx=p.slide.dir*Math.max(0,10-(10/0.9)*p.slide.t);
+    } else if(grappleMomentumEnabled() && p.grapple_inertia && !p.grounded) {
+      // Air steering is acceleration-limited; release velocity is not erased.
+      // Candidate values are experimental, NOT changes to the frozen blueprint.
+      const desired=input_x*8;
+      const step=(input_x===0?5:45)*DT;
+      p.vx+=clamp(desired-p.vx,-step,step);
     } else p.vx=p.crouch?0:input_x*8;
     if (!p.jump_ascend) p.vy=Math.max(-15,p.vy-180*DT);
     if (p.jump_ascend) p.vy-=177.78*DT;
@@ -378,7 +394,7 @@ function updateLogic() {
       if(!p.grounded || p.vx===0 || p.slide.frames>=54)finishSlide();
     }
   }
-  if(p.grounded)p.dash_used=false;
+  if(p.grounded){p.dash_used=false;p.grapple_inertia=false;}
   if(!pulling)separatePlayerBodies();
   updateCamera();
   attackQueue=[];
@@ -695,7 +711,7 @@ function respawn() {
   const p=state.player;
   Object.assign(p,{vx:0,vy:0,w:1,h:2,hp:100,st:100,ammo:60,dash_used:false,dash:null,
     grounded:false,standing_oneway_id:'',iframe:0,ignore_oneway_id:'',ignore_timer:0,
-    jump_ascend:false,jump_t:0,slide:null,crouch:false,melee:null,respawn_lock:1});
+    jump_ascend:false,jump_t:0,slide:null,crouch:false,melee:null,respawn_lock:1,grapple_inertia:false});
   function place(point) {
     p.x=point?.respawn_x??level.player_spawn.x;p.y=point?.respawn_y??level.player_spawn.y;
     p.facing=point?.respawn_facing??level.player_spawn.facing;
