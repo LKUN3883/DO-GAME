@@ -5,6 +5,7 @@ on:
       - main
       - repair/blueprint-bugs-pass1
       - repair/grapple-ch14
+      - experiment/slide-jump-momentum-20261116
   pull_request:
     branches:
       - main
