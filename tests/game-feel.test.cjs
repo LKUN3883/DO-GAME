@@ -224,7 +224,7 @@ test('opt-in slide jump hands off to air Dash without restoring launch speed and
   assert.ok(launched.vy>0&&!launched.grounded,'jump launches into the air');
   assert.ok(Math.abs(launched.vx-sliding.vx)<1e-8,'jump preserves the measured slide speed');
 
-  await p.keyboard.up('d');await p.keyboard.down('Space');await tick(p);
+  await p.keyboard.up('d');await tick(p);await p.keyboard.down('Space');await tick(p);
   const dashStart=await run("({dash:state.player.dash,carry:state.player.slide_jump,vx:state.player.vx})");
   assert.ok(dashStart.dash,'second Space press starts air Dash before handoff expires');
   assert.equal(dashStart.carry,null,'Dash takeover clears the old slide-jump handoff');
