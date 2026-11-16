@@ -180,6 +180,73 @@ test('feel baseline: collision blocks movement without sticking input, and blur 
   results.metrics.blocking={wallPreventsCrossing:true,inputResumesAfterWallRemoval:true,blurVelocity:blurStop.vx,postBlurDrift:blurSettled-blurStop.x};
 });
 
+test('opt-in grapple release momentum: carries velocity, turns in air, respects walls and resets on respawn',async t=>{
+  const {p,run}=await openGame(t);
+  const fixture=async(enabled,mode='pull',wall=false)=>{
+    const code="(() => {"+
+      "location.hash="+JSON.stringify(enabled?'#grapple-momentum':'')+";"+
+      "const player=state.player;"+
+      "Object.assign(player,{x:50,y:0,vx:9,vy:8,grounded:false,slide:null,dash:null,crouch:false,grapple_inertia:false,respawn_lock:0});"+
+      "state.rects="+(wall?"[{id:'EXP_WALL',type:'Wall',x:51.1,y:0,w:1,h:12}]":"[]")+";"+
+      "state.enemies=[];state.projectiles=[];"+
+      "state.grapple={...emptyGrapple(),mode:"+JSON.stringify(mode)+",head:{x:60,y:8,w:0.3,h:0.3},anchor:{x:60,y:8},end:false};"+
+      (mode==='stuck'?"player.vx=0;player.vy=0;":"")+
+      "keyRaw.clear();input.RMB.down=true;input.RMB.prev=false;"+
+      "return {x:player.x,y:player.y};})()";
+    return run(code);
+  };
+  await fixture(false);
+  await tick(p);
+  const baseline=await run('({vx:state.player.vx,vy:state.player.vy,carry:state.player.grapple_inertia,mode:state.grapple.mode})');
+  assert.equal(baseline.mode,'none','regular rules clean up the grapple');
+  assert.equal(baseline.vx,0,'default rules remain the frozen no-inertia baseline');
+  assert.equal(baseline.carry,false);
+
+  await fixture(true);
+  await tick(p);
+  const release=await run('({x:state.player.x,vx:state.player.vx,vy:state.player.vy,carry:state.player.grapple_inertia,mode:state.grapple.mode})');
+  assert.equal(release.mode,'none','RMB release still removes the grapple immediately');
+  assert.equal(release.carry,true,'active airborne pull enables the experimental carry state');
+  assert.ok(release.vx>8 && release.vy>0,'velocity survives release rather than being zeroed');
+  await tick(p);
+  const coast=await run('({x:state.player.x,vx:state.player.vx})');
+  assert.ok(coast.x>release.x && coast.vx>8,'released player continues moving without input');
+
+  await p.keyboard.down('a');
+  await tick(p);
+  const turn1=await run('state.player.vx');
+  assert.ok(turn1>0 && turn1<coast.vx,'opposite air steering reduces velocity gradually instead of snapping left');
+  await ticks(p,22);
+  const turned=await run('({vx:state.player.vx,grounded:state.player.grounded,carry:state.player.grapple_inertia})');
+  assert.equal(turned.grounded,false,'player stays airborne during the turning demonstration');
+  assert.ok(turned.vx<0 && turned.vx>=-8.001,'continued opposite input eventually reverses flight');
+  await p.keyboard.up('a');
+  await run('respawn()');
+  const respawned=await run('({vx:state.player.vx,vy:state.player.vy,carry:state.player.grapple_inertia})');
+  assert.deepEqual(respawned,{vx:0,vy:0,carry:false},'respawn clears the experimental momentum state');
+
+  await fixture(true,'pull',true);
+  await tick(p);
+  const collided=await run("({x:state.player.x,vx:state.player.vx,penetrated:state.rects.some(r=>penetrates(aabb(state.player),aabb(r)))})");
+  assert.equal(collided.penetrated,false,'inherited velocity cannot tunnel through the wall');
+  assert.equal(collided.vx,0,'wall collision still stops the blocked velocity component');
+  await p.keyboard.down('a');await tick(p);await p.keyboard.up('a');
+  const away=await run('({x:state.player.x,vx:state.player.vx})');
+  assert.ok(away.x<collided.x && away.vx<0,'player can steer away from the wall after release');
+
+  await fixture(true,'stuck');
+  await tick(p);
+  const stuck=await run('({vx:state.player.vx,carry:state.player.grapple_inertia,mode:state.grapple.mode})');
+  assert.equal(stuck.mode,'none');
+  assert.equal(stuck.carry,false,'releasing STUCK does not invent momentum');
+  assert.equal(stuck.vx,0);
+
+  results.metrics.grappleMomentum={optInOnly:true,baseReleaseVx:baseline.vx,
+    inheritedReleaseVx:release.vx,coastingVx:coast.vx,firstOppositeSteerVx:turn1,
+    reversedVx:turned.vx,wallCollisionStopsX:true,awayFromWall:true,
+    respawnClearsInertia:true,stuckNoFalseLaunch:true};
+});
+
 test('display baseline: full Canvas renders without overflow and produces a retained screenshot',async t=>{
   const {p,run}=await openGame(t);
   await p.clock.runFor(34);
