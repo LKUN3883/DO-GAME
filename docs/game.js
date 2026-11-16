@@ -373,15 +373,15 @@ function updateLogic() {
     if (p.dash.left<=EPS || blocked) { p.dash=null; p.vx=0; p.vy=0; }
   } else {
     if(p.slide_jump && (jumpedThisFrame || !p.grounded)) {
-      // Preserve the exact launch speed on the jump tick, then blend into air steering.
-      // The 0.18 s handoff is experimental tuning, not a mainline blueprint change.
+      // Preserve launch speed on the jump tick. Thereafter steer from CURRENT velocity,
+      // so D/A/D changes are acceleration-limited and cannot jump back to the launch vector.
+      // Experimental tuning: 90 cm/s^2 directional acceleration, 5 cm/s^2 neutral air drag.
       if(jumpedThisFrame) p.vx=p.slide_jump.vx;
       else {
         p.slide_jump.t+=DT;
-        const blend=clamp(p.slide_jump.t/0.18,0,1);
         const desired=input_x*8;
-        p.vx=p.slide_jump.vx+(desired-p.slide_jump.vx)*blend;
-        if(blend>=1)p.slide_jump=null;
+        const accel=input_x===0?5:90;
+        p.vx+=clamp(desired-p.vx,-accel*DT,accel*DT);
       }
     } else if (p.slide) {
       p.slide.t=(p.slide.frames??Math.round(p.slide.t/DT))*DT;
