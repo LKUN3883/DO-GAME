@@ -180,6 +180,33 @@ test('feel baseline: collision blocks movement without sticking input, and blur 
   results.metrics.blocking={wallPreventsCrossing:true,inputResumesAfterWallRemoval:true,blurVelocity:blurStop.vx,postBlurDrift:blurSettled-blurStop.x};
 });
 
+test('opt-in slide jump preserves launch speed and blends into air steering',async t=>{
+  const {p,run}=await openGame(t);
+  await run("location.hash='#slide-jump-momentum';"+
+    "Object.assign(state.player,{x:50,y:0,vx:9.5,vy:0,grounded:true,h:1,crouch:false,"+
+    "slide:{dir:1,t:0,frames:0},slide_jump:null,jump_ascend:false,jump_t:0,dash:null,respawn_lock:0});"+
+    "state.rects=[];state.enemies=[];state.projectiles=[];keyRaw.clear();");
+  await p.keyboard.down('Space');
+  await tick(p);
+  await p.keyboard.up('Space');
+  const launch=await run("({vx:state.player.vx,vy:state.player.vy,grounded:state.player.grounded,slide:state.player.slide,carry:state.player.slide_jump})");
+  assert.ok(launch.vx>=9.49,'first jump tick preserves the exact slide launch speed');
+  assert.ok(launch.vy>0,'slide jump launches upward');
+  assert.equal(launch.slide,null,'slide state cleanly transitions into jump');
+  assert.ok(launch.carry,'slide jump enters its temporary momentum handoff state');
+  await p.keyboard.down('a');
+  await tick(p);
+  const steer=await run('state.player.vx');
+  assert.ok(steer<launch.vx && steer>0,'opposite direction gradually steers instead of snapping');
+  await ticks(p,12);
+  const turned=await run('({vx:state.player.vx,grounded:state.player.grounded,carry:state.player.slide_jump})');
+  assert.ok(turned.vx<0,'sustained opposite input can reverse the airborne direction');
+  assert.equal(turned.grounded,false,'the player remains airborne during the handoff');
+  assert.equal(turned.carry,null,'handoff ends after its blend interval');
+  await p.keyboard.up('a');
+  results.metrics.slideJumpMomentum={launchVx:launch.vx,firstOppositeSteerVx:steer,reversedVx:turned.vx,exactInitialSpeed:true};
+});
+
 test('display baseline: full Canvas renders without overflow and produces a retained screenshot',async t=>{
   const {p,run}=await openGame(t);
   await p.clock.runFor(34);
