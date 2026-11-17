@@ -13,6 +13,7 @@
     #controls summary { cursor: pointer; font-weight: 700; }
     #controls ul { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 4px 24px; margin: 10px 0 0; padding-left: 22px; }
     #controls p { margin: 8px 0 0; color: #bbb; }
+    #controls [hidden] { display: none !important; }
   </style>
 </head>
 <body>
@@ -20,7 +21,7 @@
     <canvas id="game" width="1280" height="720" aria-label="DO-GAME 游戏画面"></canvas>
     <details id="controls" open>
       <summary>键鼠操作说明（点击收起或展开）</summary>
-      <ul>
+      <ul id="legacy-controls">
         <li><strong>A / D：</strong>向左 / 向右移动</li>
         <li><strong>S：</strong>静止时蹲下；移动时滑铲</li>
         <li><strong>S + W / Space：</strong>从单向平台下穿</li>
@@ -30,12 +31,31 @@
         <li><strong>鼠标左键按住：</strong>连续射击</li>
         <li><strong>鼠标右键按住：</strong>发射并维持钩爪；松开结束</li>
       </ul>
+      <ul id="m1-controls-list" hidden>
+        <li><strong>A / D：</strong>向左 / 向右移动</li>
+        <li><strong>W / Space：</strong>跳跃（不再兼任空中冲刺）</li>
+        <li><strong>Shift：</strong>移动时地面滑铲；空中冲刺</li>
+        <li><strong>S：</strong>蹲下；S + 跳跃可穿过单向平台</li>
+        <li><strong>J：</strong>近战攻击</li>
+        <li><strong>K / 鼠标左键：</strong>开火（当前仍是旧连续射击逻辑）</li>
+        <li><strong>U / 鼠标右键：</strong>钩索按住使用、松开释放</li>
+        <li><strong>鼠标移动：</strong>瞄准</li>
+      </ul>
+      <p id="m1-controls-note" hidden>实验模式 #m1-controls：仅验证新版输入和 M1 动作衔接，二段跳、短滑铲和单发蓄压枪尚未实现，不代表正式版已迁移。</p>
       <p>键盘操作在页面获得焦点时生效；鼠标射击和钩爪请在游戏画布内按下。</p>
     </details>
   </main>
   <script>
     // Keep guide keyboard navigation from also triggering game actions.
     document.getElementById('controls').addEventListener('keydown', (event) => event.stopPropagation());
+    const updateControlsGuide=()=>{
+      const modern=location.hash==='#m1-controls';
+      document.getElementById('legacy-controls').hidden=modern;
+      document.getElementById('m1-controls-list').hidden=!modern;
+      document.getElementById('m1-controls-note').hidden=!modern;
+    };
+    window.addEventListener('hashchange',updateControlsGuide);
+    updateControlsGuide();
   </script>
   <script type="module" src="./game.js"></script>
 </body>
