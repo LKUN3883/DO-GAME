@@ -295,3 +295,137 @@ test('M1 buffer: an available air jump cancels a queued slide',async()=>{
   assert.equal(h.run('state.player.input_buffer.slide'),0);
   h.up('KeyD');
 });
+
+test('M1 timing: ground slide lasts exactly 18 ticks at 60Hz and remains 40% lower',async()=>{
+  const h=await game('#m1-timing');
+  h.down('KeyD');h.down('ShiftLeft');h.tick();
+  assert.equal(h.run('state.player.slide.frames'),1);
+  assert.equal(h.run('state.player.h'),1.2);
+  assert.ok(h.run('state.player.vx')>=9.9);
+  h.up('ShiftLeft');
+  h.tick(16);assert.equal(h.run('state.player.slide.frames'),17);
+  const before=h.run('state.player.vx');assert.ok(before>8 && before<10);
+  h.tick();
+  assert.equal(h.run('state.player.slide'),null,'18th tick ends the short slide');
+  assert.equal(h.run('state.player.h'),2,'player stands on clear terrain');
+  assert.ok(h.run('state.player.vx')>=7.9,'slide exits with momentum rather than zero VX');
+  h.up('KeyD');
+});
+test('M1 timing: initial slide invulnerability covers six 60Hz ticks, then expires',async()=>{
+  const h=await game('#m1-timing');
+  h.down('KeyD');h.down('ShiftLeft');h.tick();h.up('ShiftLeft');
+  assert.ok(h.run('state.player.iframe')>=0.099);
+  h.run("state.hits=[{to:'player',damage:20}];resolveDamage();state.hits=[]");
+  assert.equal(h.run('state.player.hp'),100);
+  h.tick(5);
+  assert.ok(h.run('state.player.iframe')>0);
+  h.tick();
+  assert.ok(h.run('state.player.iframe')<=0.00001);
+  h.run("state.hits=[{to:'player',damage:20}];resolveDamage();state.hits=[]");
+  assert.equal(h.run('state.player.hp'),80);
+  h.up('KeyD');
+});
+test('M1 timing: neutral ground speed decelerates from 8 to zero in 5 ticks (~0.08s)',async()=>{
+  const h=await game('#m1-timing');
+  h.run('Object.assign(state.player,{vx:8,vy:0,grounded:true,dash:null,slide:null,slide_jump:null,grapple_inertia:false,jump_ascend:false})');
+  let prev=8;
+  for(let i=0;i<4;i++){
+    h.tick();
+    const v=h.run('state.player.vx');
+    assert.ok(v>=0 && v<prev);prev=v;
+  }
+  h.tick();assert.equal(h.run('state.player.vx'),0);
+  h.down('KeyD');h.tick(7);
+  assert.ok(h.run('state.player.vx')>=7.99,'0.12s ramp reaches full run speed');
+  h.up('KeyD');
+});
+test('M1 timing: sliding jump inherits the current nonzero slide exit direction',async()=>{
+  const h=await game('#m1-timing');
+  h.down('KeyD');h.down('ShiftLeft');h.tick(5);h.up('ShiftLeft');
+  const v=h.run('state.player.vx');assert.ok(v>8);
+  h.tap('Space');
+  assert.ok(h.run('state.player.vx')>=8);
+  assert.ok(h.run('state.player.vy')>0);
+  assert.equal(h.run('state.player.slide'),null);
+  assert.ok(h.run('state.player.slide_jump'));
+  h.up('KeyD');
+});
+test('M1 timing: slide ending below a ceiling remains crouched without body overlap',async()=>{
+  const h=await game('#m1-timing');
+  h.down('KeyD');h.down('ShiftLeft');h.tick();h.up('ShiftLeft');
+  h.run("state.rects.push({id:'ROOF',type:'Solid',x:53,y:-22.7,w:20,h:2})");
+  h.tick(17);
+  assert.equal(h.run('state.player.slide'),null);
+  assert.equal(h.run('state.player.h'),1,'too-low roof keeps post-slide crouch');
+  assert.equal(h.run('blockers().some(r=>penetrates(aabb(state.player),aabb(r)))'),false);
+  h.up('KeyD');
+});
+test('M1 timing: air Dash lasts 9 ticks (0.15s) and leaves bounded horizontal momentum',async()=>{
+  const h=await game('#m1-timing');air(h);
+  h.run('state.cam={x:state.player.x,y:state.player.y};mx=1279;my=360;state.player.st=100');
+  h.down('ShiftLeft');h.tick();h.up('ShiftLeft');
+  assert.ok(h.run('!!state.player.dash'));
+  assert.ok(h.run('state.player.dash.left')>6,'9 frames exceeds the previous 6-unit dash');
+  const start=h.run('state.player.x');h.tick(7);
+  assert.ok(h.run('!!state.player.dash'),'Dash remains active through tick 8');
+  h.tick();
+  assert.equal(h.run('state.player.dash'),null,'Dash ends on tick 9');
+  assert.ok(h.run('state.player.x')-start>5.5);
+  assert.ok(h.run('state.player.vx')>=7.5 && h.run('state.player.vx')<=8.001);
+  assert.equal(h.run('state.player.jump_extension.carry'),true);
+  h.tick();assert.ok(h.run('state.player.vx')>0);
+});
+test('M1 timing: thin wall cannot be tunneled through by the 50-unit/s Dash',async()=>{
+  const h=await game('#m1-timing');air(h);
+  h.run("state.cam={x:50,y:-15};mx=1279;my=360;state.rects=[{id:'THIN',type:'Wall',x:52,y:-15,w:0.05,h:10}];state.player.st=100");
+  h.down('ShiftLeft');h.tick();h.up('ShiftLeft');
+  let ticks=0;while(h.run('!!state.player.dash')&&ticks++<12)h.tick();
+  assert.ok(ticks<12);
+  assert.ok(h.run('state.player.x')<51.5,'player stops before the wall instead of passing across it');
+  assert.equal(h.run('blockers().some(r=>penetrates(aabb(state.player),aabb(r)))'),false);
+  const start=h.run('state.player.x');
+  h.down('KeyA');h.tick(3);h.up('KeyA');
+  assert.ok(h.run('state.player.x')<start,'air steering can move away after collision');
+});
+test('M1 timing: diagonal Dash checks substeps around a thin corner',async()=>{
+  const h=await game('#m1-timing');air(h);
+  h.run("state.cam={x:50,y:-15};mx=1279;my=0;state.rects=[{id:'THIN_CORNER',type:'Wall',x:52,y:-12,w:0.08,h:2}];state.player.st=100");
+  h.down('ShiftLeft');h.tick();h.up('ShiftLeft');h.tick(12);
+  assert.equal(h.run('blockers().some(r=>penetrates(aabb(state.player),aabb(r)))'),false);
+});
+test('M1 timing: downward Dash terminates on landing, without restoring used carry',async()=>{
+  const h=await game('#m1-timing');air(h);
+  h.run("state.rects=[{id:'FLOOR',type:'Solid',x:50,y:-26,w:100,h:2}];Object.assign(state.player,{x:50,y:-23.5,vx:0,vy:0,grounded:false,st:100});state.cam={x:50,y:-23.5};mx=640;my=719");
+  h.down('ShiftLeft');h.tick();h.up('ShiftLeft');
+  assert.equal(h.run('state.player.dash'),null,'collision stops a downward dash immediately');
+  assert.equal(h.run('state.player.grounded'),true);
+  assert.equal(h.run('state.player.jump_extension.carry'),false);
+  assert.equal(h.run('blockers().some(r=>penetrates(aabb(state.player),aabb(r)))'),false);
+  h.tick();assert.equal(h.run('state.player.dash_used'),false,'grounded Dash resets availability');
+});
+test('M1 timing: respawn and blur never restart a timed Dash or sliding action',async()=>{
+  const h=await game('#m1-timing');air(h);
+  h.run('state.cam={x:state.player.x,y:state.player.y};mx=1279;my=360;state.player.st=100');
+  h.down('ShiftLeft');h.tick();
+  assert.ok(h.run('!!state.player.dash'));
+  h.event('blur');h.tick();
+  assert.equal(h.run('input.Dash.down'),false);
+  h.run('respawn()');
+  assert.equal(h.run('state.player.dash'),null);
+  assert.equal(h.run('state.player.slide'),null);
+  h.tick();assert.equal(h.run('state.player.dash'),null);
+  h.up('ShiftLeft');
+});
+test('M1 timing: opt-in only; earlier #m1-buffer keeps 54-tick slide / low height 1',async()=>{
+  const h=await game('#m1-buffer');h.down('KeyD');h.down('ShiftLeft');h.tick();h.up('ShiftLeft');
+  assert.equal(h.run('state.player.h'),1);
+  assert.equal(h.run('state.player.iframe'),0);
+  h.tick(17);assert.ok(h.run('state.player.slide'),'prior buffer mode does not inherit new short slide');
+  h.up('KeyD');
+});
+for(const hash of ['', '#m1-jumps', '#m1-controls'])test('M1 timing: no change to other profiles '+hash,async()=>{
+  const h=await game(hash);
+  assert.equal(h.run('m1TimingEnabled()'),false);
+  assert.equal(h.run('M1_SLIDE_FRAMES'),18);
+  assert.equal(h.run('m1BufferEnabled()'),false);
+});
