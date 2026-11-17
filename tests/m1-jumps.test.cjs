@@ -269,3 +269,29 @@ test('M1 buffer: older hash does not acquire landing-buffer mechanics '+hash,asy
   if(hash==='#m1-jumps')assert.equal(h.run('state.player.jump_extension.last'),'double');
   if(hash==='')assert.ok(h.run('state.player.dash'));
 });
+
+test('M1 buffer: later airborne Dash cancels a previously queued landing jump',async()=>{
+  const h=await game('#m1-buffer');m1SetNearLanding(h);
+  h.tap('Space');assert.ok(h.run('state.player.input_buffer.jump')>0);
+  h.run('state.player.st=100');h.tap('ShiftLeft');
+  assert.ok(h.run('state.player.dash'),'new Dash takes ownership');
+  assert.equal(h.run('state.player.input_buffer.jump'),0,'old buffered jump cannot unexpectedly activate at landing');
+});
+test('M1 buffer: starting a new grapple cancels pending slide',async()=>{
+  const h=await game('#m1-buffer');m1SetNearLanding(h,5,true);
+  h.down('KeyD');h.tap('ShiftLeft');assert.ok(h.run('state.player.input_buffer.slide')>0);
+  h.run('state.rects=[]');h.tap('KeyU');
+  assert.equal(h.run('state.grapple.mode'),'fly');
+  assert.equal(h.run('state.player.input_buffer.slide'),0);
+  assert.equal(h.run('state.player.input_buffer.jump'),0);
+  h.up('KeyD');
+});
+test('M1 buffer: an available air jump cancels a queued slide',async()=>{
+  const h=await game('#m1-buffer');m1SetNearLanding(h,5,true);
+  h.down('KeyD');h.tap('ShiftLeft');
+  assert.ok(h.run('state.player.input_buffer.slide')>0);
+  h.run('state.rects=[]');h.tap('Space');
+  assert.equal(h.run('state.player.jump_extension.last'),'double');
+  assert.equal(h.run('state.player.input_buffer.slide'),0);
+  h.up('KeyD');
+});
