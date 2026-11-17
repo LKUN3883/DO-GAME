@@ -30,11 +30,11 @@ async function tick(p,n=1){for(let k=0;k<n;k++){
   for(let i=0;i<100;i++){await p.clock.runFor(1);const now=await p.evaluate(()=>window.__jumpTicks||0);if(now>before){assert.equal(now-before,1);advanced=true;break;}}
   assert.ok(advanced,'one production tick advances');
 }}
-async function game(t){
+async function game(t,hash='#m1-jumps'){
   const p=await browser.newPage({viewport:{width:1280,height:720}});const errors=[];p.on('pageerror',e=>errors.push(e.message));
   t.after(async()=>{await p.close();assert.deepEqual(errors,[]);});
   await p.clock.install({time:new Date('2026-11-17T00:00:00Z')});await p.clock.pauseAt(new Date('2026-11-17T00:00:10Z'));
-  await p.goto(base+'/#m1-jumps');await p.waitForFunction(()=>window.__jumpTest?.run('state!==null'));
+  await p.goto(base+'/'+hash);await p.waitForFunction(()=>window.__jumpTest?.run('state!==null'));
   const run=src=>p.evaluate(src=>window.__jumpTest.run(src),src);
   await tick(p,2);return {p,run};
 }
@@ -90,4 +90,44 @@ test('browser M1 jumps: real U rope attachment takes over jump carry, then detac
   assert.equal(await run('state.player.jump_extension.air_available'),false);
   await run('respawn()');assert.equal(await run('state.player.jump_extension'),null);
   metrics.scenarios.push({case:'jump-rope-detach-respawn',hookTicks:n,carryCleared:true,noRefill:true});
+});
+
+test('browser M1 buffer: Space before landing triggers ground jump, not an early double jump',async t=>{
+  const {p,run}=await game(t,'#m1-buffer');
+  await run("Object.assign(state.player,{x:50,y:-23.65,vx:6,vy:-6,grounded:false,dash:null,slide:null,slide_jump:null,jump_ascend:false,grapple_inertia:false,respawn_lock:0})");
+  await p.keyboard.down('Space');await tick(p);await p.keyboard.up('Space');
+  const early=await run('({buffer:state.player.input_buffer.jump,vy:state.player.vy,air:state.player.jump_extension.air_available})');
+  assert.ok(early.buffer>0 && early.vy<0 && early.air,'first keyboard event is stored, not spent as double jump');
+  let ticks=0;
+  while((await run('state.player.vy'))<=0 && ticks++<9)await tick(p);
+  const launched=await run('({vy:state.player.vy,buffer:state.player.input_buffer.jump,air:state.player.jump_extension.air_available,vx:state.player.vx})');
+  assert.ok(ticks<9 && launched.vy>0,'buffer fires after landing without another keydown');
+  assert.equal(launched.buffer,0);assert.equal(launched.air,true);
+  await shot(p,run,'m1-buffered-ground-jump');
+  metrics.scenarios.push({case:'buffered-ground-jump',early,launched,ticks});
+});
+test('browser M1 buffer: Shift while airborne Dash is spent becomes a slide on landing',async t=>{
+  const {p,run}=await game(t,'#m1-buffer');
+  await run("Object.assign(state.player,{x:50,y:-23.65,vx:5,vy:-6,grounded:false,dash_used:true,dash:null,slide:null,slide_jump:null,jump_ascend:false,respawn_lock:0})");
+  await p.keyboard.down('d');await p.keyboard.down('Shift');await tick(p);await p.keyboard.up('Shift');
+  const early=await run('({buffer:state.player.input_buffer.slide,dash:state.player.dash})');
+  assert.ok(early.buffer>0);assert.equal(early.dash,null);
+  let ticks=0;while(!(await run('!!state.player.slide')) && ticks++<9)await tick(p);
+  assert.ok(ticks<9,'slide starts from prior Shift key event');
+  const slid=await run('({dir:state.player.slide.dir,vx:state.player.vx,buffer:state.player.input_buffer.slide})');
+  assert.equal(slid.dir,1);assert.equal(slid.buffer,0);
+  await shot(p,run,'m1-buffered-landing-slide');await p.keyboard.up('d');
+  metrics.scenarios.push({case:'buffered-slide',early,slid,ticks});
+});
+test('browser M1 buffer: Alt+Tab blur discards queued actions before touchdown',async t=>{
+  const {p,run}=await game(t,'#m1-buffer');
+  await run("Object.assign(state.player,{x:50,y:-23.65,vx:0,vy:-6,grounded:false,dash:null,slide:null,jump_ascend:false,respawn_lock:0})");
+  await p.keyboard.down('Space');await tick(p);await p.keyboard.up('Space');
+  assert.ok((await run('state.player.input_buffer.jump'))>0);
+  await p.evaluate(()=>window.dispatchEvent(new Event('blur')));
+  assert.equal(await run('state.player.input_buffer.jump'),0);
+  await tick(p,10);
+  const after=await run('({grounded:state.player.grounded,vy:state.player.vy,air:state.player.jump_extension.air_available,buffer:state.player.input_buffer.jump})');
+  assert.equal(after.grounded,true);assert.equal(after.vy,0);assert.equal(after.air,true);assert.equal(after.buffer,0);
+  metrics.scenarios.push({case:'blur-queued-jump',after,noPhantomAction:true});
 });
