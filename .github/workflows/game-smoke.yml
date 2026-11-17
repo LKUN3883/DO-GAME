@@ -5,6 +5,7 @@ on:
       - main
       - repair/blueprint-bugs-pass1
       - repair/grapple-ch14
+      - experiment/slide-jump-momentum-20261116
   pull_request:
     branches:
       - main
@@ -58,7 +59,7 @@ jobs:
       - name: Game feel baseline and display regression
         run: node --test tests/game-feel.test.cjs
         env:
-          GAME_FEEL_BUILD: original-main-baseline
+          GAME_FEEL_BUILD: ${{ github.event.pull_request.head.sha || github.sha }}
           GAME_FEEL_RESULTS: test-artifacts/game-feel-baseline.json
           GAME_FEEL_SCREENSHOT: test-artifacts/game-feel-baseline.png
       - run: npm run test:browser:grapple
@@ -72,5 +73,6 @@ jobs:
           path: |
             test-artifacts/*.png
             test-artifacts/*.json
+            test-artifacts/*.csv
             browser-results/
           if-no-files-found: warn
