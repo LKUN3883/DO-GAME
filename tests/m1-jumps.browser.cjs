@@ -131,3 +131,47 @@ test('browser M1 buffer: Alt+Tab blur discards queued actions before touchdown',
   assert.equal(after.grounded,true);assert.equal(after.vy,0);assert.equal(after.air,true);assert.equal(after.buffer,0);
   metrics.scenarios.push({case:'blur-queued-jump',after,noPhantomAction:true});
 });
+
+test('browser M1 timing: Shift slide lasts 18 ticks with low posture, then glides out',async t=>{
+  const {p,run}=await game(t,'#m1-timing');
+  await p.keyboard.down('d');await p.keyboard.down('Shift');await tick(p);await p.keyboard.up('Shift');
+  const slide=await run('({h:state.player.h,frames:state.player.slide.frames,vx:state.player.vx,iframe:state.player.iframe})');
+  assert.equal(slide.h,1.2);assert.equal(slide.frames,1);
+  assert.ok(slide.vx>=9.9 && slide.iframe>=0.099);
+  await shot(p,run,'m1-timed-slide');
+  await tick(p,16);
+  assert.equal(await run('state.player.slide.frames'),17);
+  await tick(p);
+  const exit=await run('({slide:state.player.slide,vx:state.player.vx,h:state.player.h})');
+  assert.equal(exit.slide,null);assert.equal(exit.h,2);assert.ok(exit.vx>=7.9);
+  await p.keyboard.up('d');
+  await tick(p);
+  const friction=await run('state.player.vx');
+  assert.ok(friction>0 && friction<exit.vx,'slide exit coasts rather than snapping to zero');
+  metrics.scenarios.push({case:'short-slide-18-ticks',slide,exit,friction});
+});
+test('browser M1 timing: independent Shift Dash ends at 9 ticks with velocity carry',async t=>{
+  const {p,run}=await game(t,'#m1-timing');
+  await run("state.rects=[];state.enemies=[];Object.assign(state.player,{x:50,y:-15,vx:0,vy:0,grounded:false,dash:null,jump_ascend:false,st:100});state.cam={x:50,y:-15};mx=1279;my=360");
+  await p.keyboard.down('Shift');await tick(p);await p.keyboard.up('Shift');
+  assert.ok(await run('!!state.player.dash'));
+  await tick(p,7);assert.ok(await run('!!state.player.dash'));
+  await tick(p);
+  const exit=await run('({dash:state.player.dash,vx:state.player.vx,carry:state.player.jump_extension.carry})');
+  assert.equal(exit.dash,null);assert.ok(exit.vx>=7.5 && exit.vx<=8.01);assert.equal(exit.carry,true);
+  await shot(p,run,'m1-timed-dash-exit');
+  metrics.scenarios.push({case:'air-dash-nine-ticks',exit});
+});
+test('browser M1 timing: thin wall stops Dash without penetration; air steering escapes',async t=>{
+  const {p,run}=await game(t,'#m1-timing');
+  await run("state.rects=[{id:'THIN_WALL',type:'Wall',x:52,y:-15,w:0.05,h:10}];state.enemies=[];Object.assign(state.player,{x:50,y:-15,vx:0,vy:0,grounded:false,dash:null,jump_ascend:false,st:100});state.cam={x:50,y:-15};mx=1279;my=360");
+  await p.keyboard.down('Shift');await tick(p);await p.keyboard.up('Shift');
+  let n=0;while((await run('!!state.player.dash')) && n++<12)await tick(p);
+  const stopped=await run('({x:state.player.x,dash:state.player.dash,penetrates:blockers().some(r=>penetrates(aabb(state.player),aabb(r)))})');
+  assert.ok(n<12);assert.equal(stopped.dash,null);assert.ok(stopped.x<51.5);assert.equal(stopped.penetrates,false);
+  await p.keyboard.down('a');await tick(p,3);await p.keyboard.up('a');
+  const escaped=await run('({x:state.player.x,penetrates:blockers().some(r=>penetrates(aabb(state.player),aabb(r)))})');
+  assert.ok(escaped.x<stopped.x);assert.equal(escaped.penetrates,false);
+  await shot(p,run,'m1-thin-wall-dash-stop');
+  metrics.scenarios.push({case:'thin-wall-dash',stopped,escaped});
+});
