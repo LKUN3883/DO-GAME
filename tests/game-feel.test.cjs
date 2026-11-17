@@ -476,6 +476,92 @@ test('M1 priority: slide-jump to air Dash to terrain grapple clears old owners, 
   results.metrics.m1Owners={slideJump:true,airDash:true,ropeTakeover:true,respawnClearsAll:true,defaultUnchanged:true};
 });
 
+test('M1 v1.1 controls: S crouches while moving, Shift slides and airborne Shift alone starts Dash',async t=>{
+  const {p,run}=await openGame(t);
+  await run("location.hash='#m1-controls';keyRaw.clear();state.enemies=[];state.projectiles=[]");
+  await p.evaluate(()=>window.dispatchEvent(new Event('hashchange')));
+  assert.equal(await p.locator('#m1-controls-list').evaluate(e=>e.hidden),false,'the opt-in page documents its actual controls');
+  assert.equal(await p.locator('#legacy-controls').evaluate(e=>e.hidden),true,'the old guidance is not shown as if it applied to v1.1');
+
+  await p.keyboard.down('d');await p.keyboard.down('s');await tick(p);
+  const crouch=await run("({slide:state.player.slide,crouch:state.player.crouch,h:state.player.h,grounded:state.player.grounded})");
+  assert.equal(crouch.slide,null,'S no longer begins a slide while running');
+  assert.ok(crouch.crouch && crouch.h===1,'S is independently usable as crouch');
+  assert.equal(crouch.grounded,true);
+  await p.keyboard.up('s');await tick(p);
+
+  await p.keyboard.down('Shift');await tick(p);
+  const slid=await run("({slide:!!state.player.slide,vx:state.player.vx})");
+  assert.ok(slid.slide,'Shift begins slide with directional input');
+  assert.ok(slid.vx>0,'Shift slide has forward velocity');
+  await p.keyboard.up('Shift');await tick(p);
+
+  await p.keyboard.down('Space');await tick(p);await p.keyboard.up('Space');
+  const jumped=await run("({grounded:state.player.grounded,vy:state.player.vy,carry:!!state.player.slide_jump,slide:state.player.slide})");
+  assert.ok(!jumped.grounded && jumped.vy>0,'Space launches into the air');
+  assert.equal(jumped.slide,null,'jump clears slide');
+  assert.ok(jumped.carry,'M1 slide-jump speed inheritance is active');
+  await tick(p);
+  await p.keyboard.down('Space');await tick(p);
+  const secondSpace=await run("({dash:state.player.dash,used:state.player.dash_used})");
+  assert.equal(secondSpace.dash,null,'repeated Space in midair must never trigger Dash');
+  assert.equal(secondSpace.used,false,'jump key does not consume Dash availability');
+  await p.keyboard.up('Space');await tick(p);
+
+  await p.keyboard.down('Shift');await tick(p);
+  const dashed=await run("({dash:!!state.player.dash,used:state.player.dash_used,carry:state.player.slide_jump,grappleCarry:state.player.grapple_inertia,remainingSt:state.player.st})");
+  assert.equal(dashed.dash,true,'airborne Shift starts Dash independently from jumping');
+  assert.equal(dashed.used,true);
+  assert.equal(dashed.carry,null,'Dash takeover clears slide-jump momentum');
+  assert.equal(dashed.grappleCarry,false,'Dash takeover clears grapple carry');
+  await motionScreenshot(p,run,'m1-controls-air-dash');
+  await p.keyboard.up('Shift');await p.keyboard.up('d');
+  results.metrics.m1ControlsDash={sCrouch:true,shiftSlide:true,spaceDoesNotDash:true,shiftDash:true,carryCleared:true};
+});
+
+test('M1 v1.1 controls: J K U aliases, combined RMB ownership, blur and old-key fallback',async t=>{
+  const {p,run}=await openGame(t);
+  await run("location.hash='#m1-controls';keyRaw.clear();state.enemies=[];state.projectiles=[];state.player.st=100;state.player.respawn_lock=0");
+  await p.keyboard.down('f');await tick(p);await p.keyboard.up('f');
+  assert.equal(await run('state.player.melee'),null,'old F no longer accidentally performs the new-profile J attack');
+  await p.keyboard.down('j');await tick(p);
+  const melee=await run("({active:!!state.player.melee,pressed:input.F.just_pressed})");
+  assert.ok(melee.active && melee.pressed,'J triggers the existing melee state without altering combat values');
+  await p.keyboard.up('j');await tick(p);
+
+  await p.keyboard.down('k');await tick(p);
+  assert.equal(await run('input.LMB.down'),true,'K maps to existing fire input for this movement-only prototype');
+  await p.keyboard.up('k');await tick(p);
+  assert.equal(await run('input.LMB.down'),false);
+  await p.keyboard.down('u');await tick(p);
+  assert.equal(await run('input.RMB.down'),true,'U maps to the existing grapple hold input');
+  await p.mouse.move(640,360);await p.mouse.down({button:'right'});await tick(p);
+  await p.keyboard.up('u');await tick(p);
+  assert.equal(await run('input.RMB.down'),true,'releasing U does not stop grapple while RMB stays held');
+  await p.mouse.up({button:'right'});await tick(p);
+  assert.equal(await run('input.RMB.down'),false,'grapple releases only after both input sources are released');
+
+  await p.keyboard.down('Shift');await p.keyboard.down('k');await p.keyboard.down('u');
+  await tick(p);
+  await p.evaluate(()=>window.dispatchEvent(new Event('blur')));
+  await tick(p);
+  const blurred=await run("({raw:keyRaw.size,dash:input.Dash.down,fire:input.LMB.down,grapple:input.RMB.down})");
+  assert.deepEqual(blurred,{raw:0,dash:false,fire:false,grapple:false},'blur clears all new input aliases');
+  await p.keyboard.up('Shift');await p.keyboard.up('k');await p.keyboard.up('u');
+
+  await run("location.hash='';releaseAllInputs();state.player.melee=null");
+  await p.keyboard.down('j');await p.keyboard.down('Shift');await p.keyboard.down('u');await tick(p);
+  const legacy=await run("({melee:state.player.melee,dashInput:input.Dash.down,grappleInput:input.RMB.down})");
+  assert.equal(legacy.melee,null,'legacy game ignores experimental J mapping');
+  assert.equal(legacy.dashInput,false,'legacy game ignores Shift Dash input');
+  assert.equal(legacy.grappleInput,false,'legacy game ignores U grapple alias');
+  await p.keyboard.up('j');await p.keyboard.up('Shift');await p.keyboard.up('u');await tick(p);
+  await p.keyboard.down('f');await tick(p);
+  assert.ok(await run('!!state.player.melee'),'legacy F still performs its original attack');
+  await p.keyboard.up('f');
+  results.metrics.m1ControlAliases={jMelee:true,kFire:true,uGrapple:true,rmbHoldPriority:true,blurClearsAll:true,legacyUnchanged:true};
+});
+
 test('display baseline: full Canvas renders without overflow and produces a retained screenshot',async t=>{
   const {p,run}=await openGame(t);
   await p.clock.runFor(34);
