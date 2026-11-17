@@ -427,8 +427,14 @@ test('M1 opt-in: wall anchor becomes a physical rope, permits tangential motion 
   assert.equal(released.carry,true,'midair detach passes momentum to airborne motion');
   assert.ok(Math.hypot(released.vx,released.vy)>0.1,'release retains nonzero tangential velocity');
   assert.equal(released.slideJump,null,'rope handoff must not resurrect earlier slide-jump state');
+  const wallReleaseX=await run('state.player.x');
+  await p.keyboard.down('a');await ticks(p,6);await p.keyboard.up('a');
+  const turnedAway=await run("({x:state.player.x,vx:state.player.vx,carry:state.player.grapple_inertia,penetrating:state.rects.some(r=>penetrates(aabb(state.player),aabb(r)))})");
+  assert.ok(turnedAway.x<wallReleaseX && turnedAway.vx<0,'after detaching from a wall the player can steer back into open air');
+  assert.equal(turnedAway.penetrating,false,'air steering away from a wall does not penetrate geometry');
   results.metrics.m1Rope={anchorTicks:travel,ropeLength:anchor.L,maxStretch:Math.max(...positions.map(x=>x.d-x.L)),
-    yTravel:positions.at(-1).y-positions[0].y,releaseVelocity:{x:released.vx,y:released.vy},wallPenetration:false};
+    yTravel:positions.at(-1).y-positions[0].y,releaseVelocity:{x:released.vx,y:released.vy},wallPenetration:false,
+    airTurnAwayFromWall:true,airTurnFinalVx:turnedAway.vx};
 });
 
 test('M1 priority: slide-jump to air Dash to terrain grapple clears old owners, respawn drops carry',async t=>{
