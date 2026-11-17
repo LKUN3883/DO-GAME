@@ -1,6 +1,9 @@
 const DT = 1 / 60;
 // Experimental only: append #slide-jump-momentum to enable slide-jump carry.
-const m1RopeEnabled = () => typeof location !== 'undefined' && location.hash === '#m1-swing';
+// Opt-in v1.1 keyboard input profile. #m1-controls also includes M1 rope and
+// slide-jump physics; the legacy URL and all older experiment hashes are stable.
+const m1ControlsEnabled = () => typeof location !== 'undefined' && location.hash === '#m1-controls';
+const m1RopeEnabled = () => typeof location !== 'undefined' && (location.hash === '#m1-swing' || m1ControlsEnabled());
 const slideJumpMomentumEnabled = () => typeof location !== 'undefined' && (location.hash === '#slide-jump-momentum' || m1RopeEnabled());
 // Opt-in physics prototypes can also be compared separately from the old build.
 const grappleMomentumEnabled = () => typeof location !== 'undefined' && (location.hash === '#grapple-momentum' || m1RopeEnabled());
@@ -20,13 +23,14 @@ const input = {
   D: { down: false, prev: false, just_pressed: false, just_released: false },
   S: { down: false, prev: false, just_pressed: false, just_released: false },
   Jump: { down: false, prev: false, just_pressed: false, just_released: false },
+  Dash: { down: false, prev: false, just_pressed: false, just_released: false },
   F: { down: false, prev: false, just_pressed: false, just_released: false },
   LMB: { down: false, prev: false, just_pressed: false, just_released: false },
   RMB: { down: false, prev: false, just_pressed: false, just_released: false },
 };
 let mx = 640; let my = 360;
 
-const gameKeys = new Set(['KeyA','KeyD','KeyS','KeyW','Space','KeyF']);
+const gameKeys = new Set(['KeyA','KeyD','KeyS','KeyW','Space','KeyF','KeyJ','KeyK','KeyU','ShiftLeft','ShiftRight']);
 window.addEventListener('keydown', (e) => {
   if (gameKeys.has(e.code)) e.preventDefault();
   keyRaw.set(e.code, true);
@@ -98,14 +102,16 @@ function resetAll() {
 }
 
 function sampleInput() {
+  const modern=m1ControlsEnabled();
   const map = {
     A: !!keyRaw.get('KeyA'),
     D: !!keyRaw.get('KeyD'),
     S: !!keyRaw.get('KeyS'),
     Jump: !!keyRaw.get('KeyW') || !!keyRaw.get('Space'),
-    F: !!keyRaw.get('KeyF'),
-    LMB: !!keyRaw.get('Mouse0'),
-    RMB: !!keyRaw.get('Mouse2')
+    Dash: modern && (!!keyRaw.get('ShiftLeft') || !!keyRaw.get('ShiftRight')),
+    F: modern ? !!keyRaw.get('KeyJ') : !!keyRaw.get('KeyF'),
+    LMB: !!keyRaw.get('Mouse0') || (modern && !!keyRaw.get('KeyK')),
+    RMB: !!keyRaw.get('Mouse2') || (modern && !!keyRaw.get('KeyU'))
   };
 
   for (const k in input) {
@@ -368,10 +374,11 @@ function prepareStance(input_x,pulling) {
   const p=state.player;
   if(pulling || p.dash)return;
   if(p.slide)return;
-  if(p.grounded && input_x!==0 && input.S.just_pressed) {
+  const slidePressed=m1ControlsEnabled()?input.Dash.just_pressed:input.S.just_pressed;
+  if(p.grounded && input_x!==0 && slidePressed) {
     p.slide={dir:p.facing,t:0,frames:0};p.crouch=false;setPlayerHeight(1);return;
   }
-  const crouch=(p.grounded && input_x===0 && input.S.down) ||
+  const crouch=(p.grounded && (m1ControlsEnabled() || input_x===0) && input.S.down) ||
     (p.crouch && input.S.down) || !canStandPlayer();
   p.crouch=crouch;setPlayerHeight(crouch?1:2);
 }
@@ -407,7 +414,10 @@ function updateLogic() {
   }
   if (p.jump_ascend) { p.jump_t+=DT; if (p.jump_t>0.3||p.vy<=0) p.jump_ascend=false; }
 
-  if (!jumpedThisFrame && !p.grounded && !p.dash && !pulling && input.Jump.just_pressed && !p.dash_used) {
+  // In the v1.1 profile, a second jump key can NEVER silently become Dash.
+  // Shift has one input event and chooses slide on ground or Dash in air.
+  const dashPressed=m1ControlsEnabled()?input.Dash.just_pressed:input.Jump.just_pressed;
+  if (!jumpedThisFrame && !p.grounded && !p.dash && !pulling && dashPressed && !p.dash_used) {
     if (p.st>=30) { p.st-=30; p.dash_used=true; p.dash={dir:aim,left:6}; p.slide_jump=null;p.grapple_inertia=false; p.vx=0; p.vy=0; }
     else { state.hint={text:'体力不足',t:0.5}; }
   }
