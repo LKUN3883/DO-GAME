@@ -2,7 +2,8 @@ const DT = 1 / 60;
 // Experimental only: append #slide-jump-momentum to enable slide-jump carry.
 // Opt-in v1.1 keyboard input profile. #m1-controls also includes M1 rope and
 // slide-jump physics; the legacy URL and all older experiment hashes are stable.
-const m1ControlsEnabled = () => typeof location !== 'undefined' && location.hash === '#m1-controls';
+const m1JumpsEnabled = () => typeof location !== 'undefined' && location.hash === '#m1-jumps';
+const m1ControlsEnabled = () => typeof location !== 'undefined' && (location.hash === '#m1-controls' || m1JumpsEnabled());
 const m1RopeEnabled = () => typeof location !== 'undefined' && (location.hash === '#m1-swing' || m1ControlsEnabled());
 const slideJumpMomentumEnabled = () => typeof location !== 'undefined' && (location.hash === '#slide-jump-momentum' || m1RopeEnabled());
 // Opt-in physics prototypes can also be compared separately from the old build.
@@ -90,7 +91,7 @@ function resetAll() {
   const enemies = [...level.enemies].sort((a,b)=>idCompare(a.id,b.id)).map(e=>({ ...e, alive:true, discovered:false, exclaim_t:0, grounded:false, vx:0, vy:0, melee_cd:0, shoot_cd:0 }));
   state = {
     game_state:'RUN',
-    player:{x:p.x,y:p.y,vx:0,vy:0,w:1,h:2,facing:p.facing,grounded:false,standing_oneway_id:'',ignore_oneway_id:'',ignore_timer:0,hp:100,st:100,ammo:60,iframe:0,dash_used:false,dash:null,jump_t:0,jump_ascend:false,crouch:false,slide:null,slide_jump:null,melee:null,respawn_lock:0,grapple_inertia:false},
+    player:{x:p.x,y:p.y,vx:0,vy:0,w:1,h:2,facing:p.facing,grounded:false,standing_oneway_id:'',ignore_oneway_id:'',ignore_timer:0,hp:100,st:100,ammo:60,iframe:0,dash_used:false,dash:null,jump_t:0,jump_ascend:false,crouch:false,slide:null,slide_jump:null,melee:null,respawn_lock:0,grapple_inertia:false,jump_extension:null},
     boss:{...level.boss, alive:true, hp:420, vx:0, vy:0, grounded:false, active:false, dead:false, death_t:0, phase:'rifle', phase_t:2, shoot_cd:0, shot_count:0, charge_t:0, charge_pending:false, warning_t:0, charge:null},
     rects, enemies, projectiles:[], spawn_seq:0,
     grapple:emptyGrapple(),
@@ -268,6 +269,7 @@ function updateGrapple() {
     state.player.grapple_inertia=false;
     // Rope/pull takes ownership from slide-jump, Dash and forced ascent.
     state.player.dash=null;state.player.jump_ascend=false;state.player.slide_jump=null;
+    if(state.player.jump_extension)state.player.jump_extension.carry=false;
     if (!swing && Math.hypot(g.anchor.x-state.player.x,g.anchor.y-state.player.y)<=0.8+EPS) endGrapple();
     return;
   }
@@ -386,11 +388,49 @@ function playerDied() {
   const p=state.player;return p.hp<=0 || p.x<-5 || p.x>365 || p.y>20 || p.y<-40;
 }
 
+// M1 jump experiment: one free air jump and one wall kick per contacted
+// collider face until landing. Dash/grapple never refill these allowances.
+// Prototype tuning reuses the existing jump impulse and slide air steering.
+function resetM1JumpState() {
+  return {air_available:true,walls:[],carry:false,last:'ground'};
+}
+function m1JumpWall() {
+  const p=state.player,b=aabb(p),hits=[];
+  for(const r of blockers(false)) {
+    const box=aabb(r);
+    const vertical=Math.min(b.max_y,box.max_y)-Math.max(b.min_y,box.min_y);
+    if(vertical<=0.25)continue; // floors/ceilings and grazing corners are not walls
+    for(const [gap,away] of [[box.min_x-b.max_x,-1],[b.min_x-box.max_x,1]]) {
+      if(gap>=-EPS && gap<=0.02)hits.push({key:r.id+':'+away,gap,away});
+    }
+  }
+  hits.sort((a,b)=>a.gap-b.gap||idCompare(a.key,b.key));
+  return hits[0]||null;
+}
+function tryM1AirJump(pulling,downThrough) {
+  const p=state.player,j=p.jump_extension;
+  if(!m1JumpsEnabled() || !j || pulling || downThrough || p.grounded ||
+     p.respawn_lock>0 || !input.Jump.just_pressed || !canStandPlayer())return false;
+  const wall=m1JumpWall();
+  if(wall && !j.walls.includes(wall.key)) {
+    j.walls.push(wall.key);j.last='wall';p.vx=wall.away*10;p.facing=wall.away;
+  } else if(j.air_available) {
+    j.air_available=false;j.last='double';
+  } else return false;
+  // A successful jump takes over Dash but does NOT refund Dash usage.
+  // Inherit CURRENT horizontal speed, not any saved slide launch vector.
+  p.dash=null;p.slide=null;p.slide_jump=null;p.grapple_inertia=false;
+  p.crouch=false;setPlayerHeight(2);p.grounded=false;
+  p.vy=53.334;p.jump_ascend=true;p.jump_t=0;j.carry=true;
+  return true;
+}
+
 function updateLogic() {
   if(state.game_state!=='RUN')return;
   state.aim_input_locked=state.player.respawn_lock>0;
   sampleInput();
   const p=state.player;
+  if(m1JumpsEnabled() && (!p.jump_extension || p.grounded))p.jump_extension=resetM1JumpState();
   const priorHint=state.hint;
   p.iframe=Math.max(0,p.iframe-DT);
   p.ignore_timer=fixedCountdown(p.ignore_timer); if (p.ignore_timer<=0){p.ignore_timer=0;p.ignore_oneway_id='';}
@@ -406,19 +446,22 @@ function updateLogic() {
   if (downThrough) { p.ignore_oneway_id = p.standing_oneway_id; p.ignore_timer = 0.2; }
 
   prepareStance(input_x,pulling);
-  const jumpedThisFrame = !pulling && p.grounded && input.Jump.just_pressed && !downThrough && canStandPlayer();
+  let jumpedThisFrame = !pulling && p.grounded && input.Jump.just_pressed && !downThrough && canStandPlayer();
   if (jumpedThisFrame) {
     const slideLaunch=slideJumpMomentumEnabled() && p.slide ? {vx:p.vx,dir:p.slide.dir,t:0} : null;
     p.crouch=false;p.slide=null;p.slide_jump=slideLaunch;setPlayerHeight(2);
     p.vy=53.334; p.jump_ascend=true; p.jump_t=0;
   }
+  if(!jumpedThisFrame)jumpedThisFrame=tryM1AirJump(pulling,downThrough);
   if (p.jump_ascend) { p.jump_t+=DT; if (p.jump_t>0.3||p.vy<=0) p.jump_ascend=false; }
 
   // In the v1.1 profile, a second jump key can NEVER silently become Dash.
   // Shift has one input event and chooses slide on ground or Dash in air.
   const dashPressed=m1ControlsEnabled()?input.Dash.just_pressed:input.Jump.just_pressed;
   if (!jumpedThisFrame && !p.grounded && !p.dash && !pulling && dashPressed && !p.dash_used) {
-    if (p.st>=30) { p.st-=30; p.dash_used=true; p.dash={dir:aim,left:6}; p.slide_jump=null;p.grapple_inertia=false; p.vx=0; p.vy=0; }
+    if (p.st>=30) { p.st-=30; p.dash_used=true; p.dash={dir:aim,left:6}; p.slide_jump=null;p.grapple_inertia=false;
+      if(m1JumpsEnabled()){p.jump_extension.carry=false;p.jump_ascend=false;}
+      p.vx=0; p.vy=0; }
     else { state.hint={text:'体力不足',t:0.5}; }
   }
 
@@ -442,7 +485,12 @@ function updateLogic() {
     p.dash.left -= step;
     if (p.dash.left<=EPS || blocked) { p.dash=null; p.vx=0; p.vy=0; }
   } else {
-    if(p.slide_jump && (jumpedThisFrame || !p.grounded)) {
+    if(m1JumpsEnabled() && p.jump_extension?.carry && !p.grounded) {
+      if(!jumpedThisFrame) {
+        const accel=input_x===0?5:90;
+        p.vx+=clamp(input_x*8-p.vx,-accel*DT,accel*DT);
+      }
+    } else if(p.slide_jump && (jumpedThisFrame || !p.grounded)) {
       // Preserve launch speed on the jump tick. Thereafter steer from CURRENT velocity,
       // so D/A/D changes are acceleration-limited and cannot jump back to the launch vector.
       // Experimental tuning: 90 cm/s^2 directional acceleration, 5 cm/s^2 neutral air drag.
@@ -469,7 +517,9 @@ function updateLogic() {
       if(!p.grounded || p.vx===0 || p.slide.frames>=54)finishSlide();
     }
   }
-  if(p.grounded){p.dash_used=false;if(p.slide_jump)p.slide_jump=null;p.grapple_inertia=false;}
+  if(p.grounded){p.dash_used=false;if(p.slide_jump)p.slide_jump=null;p.grapple_inertia=false;
+    if(m1JumpsEnabled())p.jump_extension=resetM1JumpState();
+  }
   if(!pulling)separatePlayerBodies();
   updateCamera();
   attackQueue=[];
@@ -786,7 +836,7 @@ function respawn() {
   const p=state.player;
   Object.assign(p,{vx:0,vy:0,w:1,h:2,hp:100,st:100,ammo:60,dash_used:false,dash:null,
     grounded:false,standing_oneway_id:'',iframe:0,ignore_oneway_id:'',ignore_timer:0,
-    jump_ascend:false,jump_t:0,slide:null,slide_jump:null,crouch:false,melee:null,respawn_lock:1,grapple_inertia:false});
+    jump_ascend:false,jump_t:0,slide:null,slide_jump:null,crouch:false,melee:null,respawn_lock:1,grapple_inertia:false,jump_extension:null});
   function place(point) {
     p.x=point?.respawn_x??level.player_spawn.x;p.y=point?.respawn_y??level.player_spawn.y;
     p.facing=point?.respawn_facing??level.player_spawn.facing;
