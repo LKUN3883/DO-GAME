@@ -49,7 +49,8 @@
     // Keep guide keyboard navigation from also triggering game actions.
     document.getElementById('controls').addEventListener('keydown', (event) => event.stopPropagation());
     const updateControlsGuide=()=>{
-      const buffered=location.hash==='#m1-buffer';
+      const timing=location.hash==='#m1-timing';
+      const buffered=location.hash==='#m1-buffer'||timing;
       const jumps=location.hash==='#m1-jumps'||buffered;
       const modern=location.hash==='#m1-controls'||jumps;
       document.getElementById('legacy-controls').hidden=modern;
@@ -58,8 +59,9 @@
       document.getElementById('m1-jump-description').textContent=jumps?
         '跳跃；空中再跳一次；贴墙再按可蹬离墙面（每面墙每次腾空一次）':
         '跳跃（不再兼任空中冲刺）';
-      document.getElementById('m1-controls-note').textContent=buffered?
-        '实验模式 #m1-buffer：距落地约9个逻辑帧内提前按跳跃，会在落地后自动起跳（不消耗二段跳）；空冲已使用时，提前按Shift可接地面滑铲。落地转向采用渐进加减速，失焦取消缓存。新版短滑铲/冲刺时长、蓄压枪尚未实现。更换实验模式请刷新页面。':
+      document.getElementById('m1-controls-note').textContent=timing?
+        '实验模式 #m1-timing：包含上一阶段的绳索、二段跳/墙跳、9帧输入缓冲；Shift 地面滑铲18帧（0.30秒）、前6帧短暂保护、身高降低40%；空中Dash 9帧（0.15秒），撞墙或落地结束，离开后不突然清零速度。K仍是旧连续射击，尚无新版蓄压枪。更换实验模式请刷新页面。':
+        buffered?'实验模式 #m1-buffer：距落地约9个逻辑帧内提前按跳跃，会在落地后自动起跳（不消耗二段跳）；空冲已使用时，提前按Shift可接地面滑铲。落地转向采用渐进加减速，失焦取消缓存。新版短滑铲/冲刺时长、蓄压枪尚未实现。更换实验模式请刷新页面。':
         jumps?'实验模式 #m1-jumps：二段跳免费，蹬墙跳不消耗二段跳；落地重置次数。Shift 冲刺不消耗跳数。钩索牵引时先松开 U/右键再跳。输入缓冲、短滑铲和蓄压枪仍未实现；更换实验模式后请刷新页面。':
         '实验模式 #m1-controls：仅验证新版输入和 M1 动作衔接，二段跳、短滑铲和单发蓄压枪尚未实现，不代表正式版已迁移。';
     };
