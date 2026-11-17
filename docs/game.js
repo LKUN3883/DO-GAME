@@ -2,7 +2,10 @@ const DT = 1 / 60;
 // Experimental only: append #slide-jump-momentum to enable slide-jump carry.
 // Opt-in v1.1 keyboard input profile. #m1-controls also includes M1 rope and
 // slide-jump physics; the legacy URL and all older experiment hashes are stable.
-const m1JumpsEnabled = () => typeof location !== 'undefined' && location.hash === '#m1-jumps';
+// Independent 9-tick jump / spent-Dash-to-slide landing-buffer prototype.
+const m1BufferEnabled = () => typeof location !== 'undefined' && location.hash === '#m1-buffer';
+const M1_BUFFER_FRAMES = 9;
+const m1JumpsEnabled = () => typeof location !== 'undefined' && (location.hash === '#m1-jumps' || m1BufferEnabled());
 const m1ControlsEnabled = () => typeof location !== 'undefined' && (location.hash === '#m1-controls' || m1JumpsEnabled());
 const m1RopeEnabled = () => typeof location !== 'undefined' && (location.hash === '#m1-swing' || m1ControlsEnabled());
 const slideJumpMomentumEnabled = () => typeof location !== 'undefined' && (location.hash === '#slide-jump-momentum' || m1RopeEnabled());
@@ -43,6 +46,11 @@ window.addEventListener('keyup', (e) => {
 // A lost keyup must never leave the player moving indefinitely.
 function releaseAllInputs() {
   keyRaw.clear();
+  // Cached button intents must not execute after Alt+Tab / lost focus.
+  if(state?.player?.input_buffer) {
+    state.player.input_buffer.jump=0;
+    state.player.input_buffer.slide=0;
+  }
 }
 window.addEventListener('blur', releaseAllInputs);
 document.addEventListener('visibilitychange', () => {
@@ -91,7 +99,7 @@ function resetAll() {
   const enemies = [...level.enemies].sort((a,b)=>idCompare(a.id,b.id)).map(e=>({ ...e, alive:true, discovered:false, exclaim_t:0, grounded:false, vx:0, vy:0, melee_cd:0, shoot_cd:0 }));
   state = {
     game_state:'RUN',
-    player:{x:p.x,y:p.y,vx:0,vy:0,w:1,h:2,facing:p.facing,grounded:false,standing_oneway_id:'',ignore_oneway_id:'',ignore_timer:0,hp:100,st:100,ammo:60,iframe:0,dash_used:false,dash:null,jump_t:0,jump_ascend:false,crouch:false,slide:null,slide_jump:null,melee:null,respawn_lock:0,grapple_inertia:false,jump_extension:null},
+    player:{x:p.x,y:p.y,vx:0,vy:0,w:1,h:2,facing:p.facing,grounded:false,standing_oneway_id:'',ignore_oneway_id:'',ignore_timer:0,hp:100,st:100,ammo:60,iframe:0,dash_used:false,dash:null,jump_t:0,jump_ascend:false,crouch:false,slide:null,slide_jump:null,melee:null,respawn_lock:0,grapple_inertia:false,jump_extension:null,input_buffer:null},
     boss:{...level.boss, alive:true, hp:420, vx:0, vy:0, grounded:false, active:false, dead:false, death_t:0, phase:'rifle', phase_t:2, shoot_cd:0, shot_count:0, charge_t:0, charge_pending:false, warning_t:0, charge:null},
     rects, enemies, projectiles:[], spawn_seq:0,
     grapple:emptyGrapple(),
@@ -369,15 +377,20 @@ function canStandPlayer() {
   return !blockers().some(r=>penetrates(aabb(standing),aabb(r)));
 }
 function finishSlide() {
-  const p=state.player;p.slide=null;p.vx=0;
+  const p=state.player;p.slide=null;
+  if(!m1BufferEnabled())p.vx=0; // opt-in: carry real slide exit velocity into ground steering
   p.crouch=input.S.down || !canStandPlayer();setPlayerHeight(p.crouch?1:2);
 }
 function prepareStance(input_x,pulling) {
   const p=state.player;
   if(pulling || p.dash)return;
   if(p.slide)return;
-  const slidePressed=m1ControlsEnabled()?input.Dash.just_pressed:input.S.just_pressed;
-  if(p.grounded && input_x!==0 && slidePressed) {
+  const bufferedSlide=m1BufferEnabled() && (p.input_buffer?.slide??0)>0;
+  const slidePressed=m1ControlsEnabled()?(input.Dash.just_pressed||bufferedSlide):input.S.just_pressed;
+  // Buffered jump takes priority over a second, early ground-slide intent.
+  if(p.grounded && input_x!==0 && slidePressed &&
+     !(m1BufferEnabled() && p.input_buffer.jump>0)) {
+    if(bufferedSlide)p.input_buffer.slide=0;
     p.slide={dir:p.facing,t:0,frames:0};p.crouch=false;setPlayerHeight(1);return;
   }
   const crouch=(p.grounded && (m1ControlsEnabled() || input_x===0) && input.S.down) ||
@@ -410,7 +423,8 @@ function m1JumpWall() {
 function tryM1AirJump(pulling,downThrough) {
   const p=state.player,j=p.jump_extension;
   if(!m1JumpsEnabled() || !j || pulling || downThrough || p.grounded ||
-     p.respawn_lock>0 || !input.Jump.just_pressed || !canStandPlayer())return false;
+     p.respawn_lock>0 || !input.Jump.just_pressed || !canStandPlayer() ||
+     (m1BufferEnabled() && p.input_buffer.jump>0))return false;
   const wall=m1JumpWall();
   if(wall && !j.walls.includes(wall.key)) {
     j.walls.push(wall.key);j.last='wall';p.vx=wall.away*10;p.facing=wall.away;
@@ -425,12 +439,31 @@ function tryM1AirJump(pulling,downThrough) {
   return true;
 }
 
+// Predict only a downward landing within 9 simulation ticks. Never convert
+// a mid-air jump into a delayed ground jump when a valid wall kick is present.
+// The platform's top must be crossed, and the player must be supported in X.
+function m1LandingSoon() {
+  const p=state.player;
+  if(p.grounded || p.vy>0 || p.dash || grapplePulling())return false;
+  const t=M1_BUFFER_FRAMES*DT;
+  const foot=p.y-p.h/2,projected=foot+p.vy*t-90*t*t;
+  const projectedX=p.x+p.vx*t;
+  return state.rects.some(r=>{
+    if(!['Solid','Wall','OneWay'].includes(r.type) && !(r.type==='Door'&&r.locked))return false;
+    if(r.type==='OneWay' && p.ignore_oneway_id===r.id)return false;
+    const top=r.y+r.h/2;
+    const currentX=p.x+p.w/2>r.x-r.w/2 && p.x-p.w/2<r.x+r.w/2;
+    const futureX=projectedX+p.w/2>r.x-r.w/2 && projectedX-p.w/2<r.x+r.w/2;
+    return (currentX||futureX) && foot>=top+EPS && projected<=top+EPS;
+  });
+}
 function updateLogic() {
   if(state.game_state!=='RUN')return;
   state.aim_input_locked=state.player.respawn_lock>0;
   sampleInput();
   const p=state.player;
   if(m1JumpsEnabled() && (!p.jump_extension || p.grounded))p.jump_extension=resetM1JumpState();
+  if(m1BufferEnabled() && !p.input_buffer)p.input_buffer={jump:0,slide:0};
   const priorHint=state.hint;
   p.iframe=Math.max(0,p.iframe-DT);
   p.ignore_timer=fixedCountdown(p.ignore_timer); if (p.ignore_timer<=0){p.ignore_timer=0;p.ignore_oneway_id='';}
@@ -439,6 +472,23 @@ function updateLogic() {
   if (input_x!==0) p.facing=input_x;
   const aim = playerAimDir();
 
+  if(m1BufferEnabled()) {
+    // A tap is eligible for the current tick and the next 8 ticks.
+    const b=p.input_buffer;
+    b.jump=Math.max(0,b.jump-1);
+    b.slide=Math.max(0,b.slide-1);
+    if(input.Jump.just_pressed && !p.grounded && p.respawn_lock===0 &&
+       !grapplePulling() && m1LandingSoon()) {
+      const wall=m1JumpWall();
+      if(!wall || p.jump_extension.walls.includes(wall.key))b.jump=M1_BUFFER_FRAMES;
+    }
+    // A second Shift while Dash is already used should arm a ground slide
+    // near landing, not consume ST or create another airborne Dash.
+    if(input.Dash.just_pressed && !p.grounded && p.dash_used &&
+       input_x!==0 && !grapplePulling() && m1LandingSoon())b.slide=M1_BUFFER_FRAMES;
+    // S+Jump at a OneWay landing is not a request to auto-bounce upward.
+    if(p.grounded && p.standing_oneway_id && input.S.down)b.jump=0;
+  }
   if (input.RMB.just_released && state.grapple.mode!=='none') endGrapple('release');
   const pulling=grapplePulling();
 
@@ -446,8 +496,11 @@ function updateLogic() {
   if (downThrough) { p.ignore_oneway_id = p.standing_oneway_id; p.ignore_timer = 0.2; }
 
   prepareStance(input_x,pulling);
-  let jumpedThisFrame = !pulling && p.grounded && input.Jump.just_pressed && !downThrough && canStandPlayer();
+  const bufferedJump=m1BufferEnabled() && p.input_buffer.jump>0;
+  let jumpedThisFrame = !pulling && p.grounded &&
+    (input.Jump.just_pressed || bufferedJump) && !downThrough && canStandPlayer();
   if (jumpedThisFrame) {
+    if(m1BufferEnabled()){p.input_buffer.jump=0;p.input_buffer.slide=0;}
     const slideLaunch=slideJumpMomentumEnabled() && p.slide ? {vx:p.vx,dir:p.slide.dir,t:0} : null;
     p.crouch=false;p.slide=null;p.slide_jump=slideLaunch;setPlayerHeight(2);
     p.vy=53.334; p.jump_ascend=true; p.jump_t=0;
@@ -508,6 +561,12 @@ function updateLogic() {
       const desired=input_x*8;
       const limit=(input_x===0?5:45)*DT;
       p.vx+=clamp(desired-p.vx,-limit,limit);
+    } else if(m1BufferEnabled()) {
+      // Velocity is continuous across the airborne/grounded boundary.
+      // Ground acceleration / friction are tuned separately from air steering.
+      const desired=p.crouch?0:input_x*8;
+      const accel=p.grounded?(input_x!==0?70:45):(input_x!==0?45:5);
+      p.vx+=clamp(desired-p.vx,-accel*DT,accel*DT);
     } else p.vx=p.crouch?0:input_x*8;
     if (!p.jump_ascend) p.vy=Math.max(-15,p.vy-180*DT);
     if (p.jump_ascend) p.vy-=177.78*DT;
@@ -836,7 +895,7 @@ function respawn() {
   const p=state.player;
   Object.assign(p,{vx:0,vy:0,w:1,h:2,hp:100,st:100,ammo:60,dash_used:false,dash:null,
     grounded:false,standing_oneway_id:'',iframe:0,ignore_oneway_id:'',ignore_timer:0,
-    jump_ascend:false,jump_t:0,slide:null,slide_jump:null,crouch:false,melee:null,respawn_lock:1,grapple_inertia:false,jump_extension:null});
+    jump_ascend:false,jump_t:0,slide:null,slide_jump:null,crouch:false,melee:null,respawn_lock:1,grapple_inertia:false,jump_extension:null,input_buffer:null});
   function place(point) {
     p.x=point?.respawn_x??level.player_spawn.x;p.y=point?.respawn_y??level.player_spawn.y;
     p.facing=point?.respawn_facing??level.player_spawn.facing;
