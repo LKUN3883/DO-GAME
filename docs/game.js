@@ -476,7 +476,9 @@ function updateLogic() {
   if(m1JumpsEnabled() && (!p.jump_extension || p.grounded))p.jump_extension=resetM1JumpState();
   if(m1BufferEnabled() && !p.input_buffer)p.input_buffer={jump:0,slide:0};
   const priorHint=state.hint;
-  p.iframe=Math.max(0,p.iframe-DT);
+  // Timing prototype counts protection on the 60Hz grid: exactly six
+  // protected slide ticks, without floating-point residue extending an i-frame.
+  p.iframe=m1TimingEnabled()?fixedCountdown(p.iframe):Math.max(0,p.iframe-DT);
   p.ignore_timer=fixedCountdown(p.ignore_timer); if (p.ignore_timer<=0){p.ignore_timer=0;p.ignore_oneway_id='';}
 
   let input_x = (input.A.down?-1:0)+(input.D.down?1:0); if (input.A.down&&input.D.down) input_x=0;
