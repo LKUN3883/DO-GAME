@@ -275,6 +275,7 @@ function updateGrapple() {
       state.player.slide=null; // new movement owner: rope
     }
     state.player.grapple_inertia=false;
+    if(m1BufferEnabled() && state.player.input_buffer){state.player.input_buffer.jump=0;state.player.input_buffer.slide=0;}
     // Rope/pull takes ownership from slide-jump, Dash and forced ascent.
     state.player.dash=null;state.player.jump_ascend=false;state.player.slide_jump=null;
     if(state.player.jump_extension)state.player.jump_extension.carry=false;
@@ -434,6 +435,7 @@ function tryM1AirJump(pulling,downThrough) {
   // A successful jump takes over Dash but does NOT refund Dash usage.
   // Inherit CURRENT horizontal speed, not any saved slide launch vector.
   p.dash=null;p.slide=null;p.slide_jump=null;p.grapple_inertia=false;
+  if(m1BufferEnabled()){p.input_buffer.jump=0;p.input_buffer.slide=0;}
   p.crouch=false;setPlayerHeight(2);p.grounded=false;
   p.vy=53.334;p.jump_ascend=true;p.jump_t=0;j.carry=true;
   return true;
@@ -514,6 +516,7 @@ function updateLogic() {
   if (!jumpedThisFrame && !p.grounded && !p.dash && !pulling && dashPressed && !p.dash_used) {
     if (p.st>=30) { p.st-=30; p.dash_used=true; p.dash={dir:aim,left:6}; p.slide_jump=null;p.grapple_inertia=false;
       if(m1JumpsEnabled()){p.jump_extension.carry=false;p.jump_ascend=false;}
+      if(m1BufferEnabled()){p.input_buffer.jump=0;p.input_buffer.slide=0;}
       p.vx=0; p.vy=0; }
     else { state.hint={text:'体力不足',t:0.5}; }
   }
@@ -523,7 +526,10 @@ function updateLogic() {
     else state.hint={text:'体力不足',t:0.5};
   }
 
-  if (input.RMB.just_pressed && state.grapple.mode==='none') spawnGrapple(aim);
+  if (input.RMB.just_pressed && state.grapple.mode==='none' && spawnGrapple(aim)) {
+    // A newly claimed grapple cancels earlier near-landing movement requests.
+    if(m1BufferEnabled()){p.input_buffer.jump=0;p.input_buffer.slide=0;}
+  }
 
   if (pulling) {
     moveGrapplePlayer(input_x,separatePlayerBodies);
