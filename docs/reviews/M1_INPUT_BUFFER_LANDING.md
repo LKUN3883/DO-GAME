@@ -29,3 +29,24 @@ Avoid losing Jump/Shift commands when pressed shortly before landing, and avoid 
 - Windows user human A/B only after merged feature baseline has an independent browser-accessible preview and a short script. Automated Chromium is never a substitute for real Windows input feel.
 
 Do not merge this stacked Draft independently alongside #15/#16/#17/#18; integrate at most one reviewed cumulative branch after full acceptance.
+
+
+## M1 fifth slice: 0.30s slide and 0.15s Dash (`#m1-timing`, 2026-11-17)
+
+This cumulative branch extends `#m1-buffer` with the following **experimental tuning grounded in the uploaded v1.1 §§1.2 and 1.4**:
+
+- Ground Shift slide: **18 fixed ticks** at 60Hz (0.30s, within 0.25–0.35s); 40% lower player collision body (height 1.2 vs 2), **six protected ticks** (0.10s). Fixed-countdown is used in this mode to avoid floating-point i-frame overrun.
+- The slide speed eases **10→8 world units/s**, preserving velocity through slide→jump and at slide exit; low ceilings retain crouch if standing would penetrate solids.
+- Air Shift Dash: **9 ticks** (0.15s) at 50 world units/s, maximum 7.5 units of motion; collision or landing ends it. The 60Hz Dash frame is subdivided into **<=0.25 unit** substeps and each slice uses the existing axis collision solver to prevent tunneling through thin walls.
+- On natural airborne Dash expiry a bounded **8 units/s** directional velocity remains with air steering. On wall impact preserve only unblocked solver motion. On ground contact clear airborne carry. New jump/grapple still own their transition.
+- Normal acceleration **70 world units/s²** approaches speed 8 in ~0.12s; neutral ground friction **100 world units/s²** stops from 8 in ~0.08s. Other modes retain the preceding tuning.
+
+**Isolation:** `#m1-timing` alone enables these new rules. No-hash main gameplay and older `#m1-buffer`, `#m1-jumps`, `#m1-controls` profiles are unchanged. This is still not an engine swap, full 3-input melee/charged gun redesign, or a real Windows feel acceptance.
+
+**QA:** added 14 Node VM cases for 18/9 tick boundaries, posture, protection, low ceiling, momentum, thin wall, downward collision, blur/respawn and old-profile isolation; plus 3 Chromium real-key scenarios with screenshots. Must pass Ubuntu/Windows Node and Chromium, legacy grapple and complete-playthrough before consideration.
+
+**Known limitations:** shared legacy `p.iframe` is not yet separated into slide-specific vs received-damage invulnerability; rope wrapping around complex corners, dynamic environment geometry, sprite animations and Windows human A/B remain outside this slice. There is no independently deployed preview.
+
+**GitHub bookkeeping correction:** an attempted *new* review file write landed on main unexpectedly and was reverted immediately. Main's post-revert **file tree matches the former stable main tree byte-for-byte**, but Git history contains the add/revert pair. This review section is now deliberately added by updating this existing file on the Draft branch only. Do not claim main's commit SHA is unchanged.
+
+**Safe release rule:** this Draft stacks on #15/#16/#17/#18/#19; never merge every overlapping PR independently. Select one later reviewed integration path and obtain human Windows acceptance before treating M1 as ready.
