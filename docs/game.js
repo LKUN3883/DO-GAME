@@ -72,6 +72,7 @@ async function boot() {
   const res = await fetch('./level_train_v1.json');
   level = await res.json();
   resetAll();
+  renderPrevious=captureRenderState();
   requestAnimationFrame(loop);
 }
 
@@ -731,34 +732,39 @@ function updateCamera() {
 
 function render() {
   ctx.clearRect(0,0,canvas.width,canvas.height);
-  const toScreen=(x,y)=>({x:(x-(state.cam.x-VIEW_HW))*PX_PER_CM,y:(state.cam.y+VIEW_HH-y)*PX_PER_CM});
-  const drawRect=(o,c)=>{const s=toScreen(o.x,o.y);ctx.fillStyle=c;ctx.strokeStyle='#000';ctx.lineWidth=2;ctx.fillRect(s.x-o.w*PX_PER_CM/2,s.y-o.h*PX_PER_CM/2,o.w*PX_PER_CM,o.h*PX_PER_CM);ctx.strokeRect(s.x-o.w*PX_PER_CM/2,s.y-o.h*PX_PER_CM/2,o.w*PX_PER_CM,o.h*PX_PER_CM);};
+  const alpha=clamp(acc/DT,0,1);
+  const renderCam=interpolateRenderPoint(renderPrevious?.cam,state.cam,alpha,4);
+  const playerPos=renderPosition('player',state.player,alpha);
+  const toScreen=(x,y)=>({x:(x-(renderCam.x-VIEW_HW))*PX_PER_CM,y:(renderCam.y+VIEW_HH-y)*PX_PER_CM});
+  const drawRect=(o,c,pos={x:o.x,y:o.y})=>{const s=toScreen(pos.x,pos.y);ctx.fillStyle=c;ctx.strokeStyle='#000';ctx.lineWidth=2;ctx.fillRect(s.x-o.w*PX_PER_CM/2,s.y-o.h*PX_PER_CM/2,o.w*PX_PER_CM,o.h*PX_PER_CM);ctx.strokeRect(s.x-o.w*PX_PER_CM/2,s.y-o.h*PX_PER_CM/2,o.w*PX_PER_CM,o.h*PX_PER_CM);};
   for (const r of state.rects) {
     if(!['Solid','Wall','OneWay','Door'].includes(r.type))continue;
     if (r.type==='Door'&&!r.locked) continue;
     drawRect(r,r.type==='OneWay'?'rgba(120,200,120,1)':r.type==='Door'?'rgba(200,140,80,1)':'rgba(120,120,120,1)');
   }
-  for (const e of state.enemies.filter(e=>e.alive)) drawRect(e,e.type==='melee_basic'?'rgba(255,120,120,0.8627450980392157)':e.type==='ranged_rifle'?'rgba(255,170,80,0.8627450980392157)':'rgba(180,120,255,0.8627450980392157)');
+  for (const e of state.enemies.filter(e=>e.alive)) drawRect(e,e.type==='melee_basic'?'rgba(255,120,120,0.8627450980392157)':e.type==='ranged_rifle'?'rgba(255,170,80,0.8627450980392157)':'rgba(180,120,255,0.8627450980392157)',renderPosition(`enemy:${e.id}`,e,alpha));
   const b=state.boss;
   const bossVisible=b.phase!=='warn' || Math.floor((b.warning_t+0.15)/0.25)%2===0;
-  if (b.active && b.alive && !b.dead && bossVisible) drawRect(b,'rgba(255,200,80,0.8627450980392157)');
-  for (const p of state.projectiles) drawRect(p,p.owner==='player'?'rgba(235,235,235,1)':(p.w<0.2?'rgba(220,180,255,1)':'rgba(255,240,160,1)'));
-  drawRect(state.player,'rgba(80,180,255,0.8627450980392157)');
+  if (b.active && b.alive && !b.dead && bossVisible) drawRect(b,'rgba(255,200,80,0.8627450980392157)',renderPosition('boss',b,alpha));
+  for (const p of state.projectiles) drawRect(p,p.owner==='player'?'rgba(235,235,235,1)':(p.w<0.2?'rgba(220,180,255,1)':'rgba(255,240,160,1)'),renderPosition(`projectile:${p.spawn_seq}`,p,alpha));
+  drawRect(state.player,'rgba(80,180,255,0.8627450980392157)',playerPos);
   const g=state.grapple;
   if (g.head && !g.end) {
-    const from=toScreen(state.player.x,state.player.y),to=toScreen(g.head.x,g.head.y);
+    const grapplePos=renderPosition('grapple',g.head,alpha);
+    const from=toScreen(playerPos.x,playerPos.y),to=toScreen(grapplePos.x,grapplePos.y);
     ctx.strokeStyle='rgba(160,160,160,1)';ctx.lineWidth=2;
     ctx.beginPath();ctx.moveTo(from.x,from.y);ctx.lineTo(to.x,to.y);ctx.stroke();
-    drawRect(g.head,'rgba(160,160,160,1)');
+    drawRect(g.head,'rgba(160,160,160,1)',grapplePos);
   }
   ctx.font='20px sans-serif';
   for (const enemy of state.enemies) {
     if (!enemy.alive || enemy.exclaim_t<=0) continue;
-    const pos=toScreen(enemy.x,enemy.y+enemy.h/2);
+    const enemyPos=renderPosition(`enemy:${enemy.id}`,enemy,alpha);
+    const pos=toScreen(enemyPos.x,enemyPos.y+enemy.h/2);
     ctx.fillStyle='white';ctx.fillText('!',Math.round(pos.x),Math.round(pos.y-12));
   }
-  const aim=playerAimDir();
-  const s=toScreen(state.player.x,state.player.y), e=toScreen(state.player.x+aim.x*2,state.player.y+aim.y*2);
+  const aim=renderAimDir(renderCam,playerPos);
+  const s=toScreen(playerPos.x,playerPos.y), e=toScreen(playerPos.x+aim.x*2,playerPos.y+aim.y*2);
   ctx.strokeStyle='white';ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(s.x,s.y);ctx.lineTo(e.x,e.y);ctx.stroke();
   const fx=Math.round(s.x+state.player.facing*(state.player.w*PX_PER_CM/2+4)),fy=Math.round(s.y);
   ctx.fillStyle='rgba(80,180,255,0.8627450980392157)';ctx.strokeStyle='#000';ctx.lineWidth=2;
@@ -770,11 +776,43 @@ function render() {
   if (state.boss.active && state.boss.alive) ctx.fillText(`BOSS HP ${Math.max(0,Math.round(state.boss.hp))}/420`,24,96);
 }
 
+let renderPrevious=null;
+function captureRenderState() {
+  const entities=new Map();
+  entities.set('player',{x:state.player.x,y:state.player.y});
+  for(const e of state.enemies)entities.set(`enemy:${e.id}`,{x:e.x,y:e.y});
+  entities.set('boss',{x:state.boss.x,y:state.boss.y});
+  for(const p of state.projectiles)entities.set(`projectile:${p.spawn_seq}`,{x:p.x,y:p.y});
+  if(state.grapple.head)entities.set('grapple',{x:state.grapple.head.x,y:state.grapple.head.y});
+  return {cam:{x:state.cam.x,y:state.cam.y},entities};
+}
+function interpolateRenderPoint(previous,current,alpha,maxDistance=4) {
+  if(!previous)return {x:current.x,y:current.y};
+  const dx=current.x-previous.x,dy=current.y-previous.y;
+  // Teleports (respawn/checkpoint/camera clamp changes) snap instead of sliding.
+  if(Math.hypot(dx,dy)>maxDistance)return {x:current.x,y:current.y};
+  return {x:previous.x+dx*alpha,y:previous.y+dy*alpha};
+}
+function renderPosition(key,object,alpha) {
+  return interpolateRenderPoint(renderPrevious?.entities.get(key),object,alpha,2);
+}
+function renderAimDir(renderCam,playerPos) {
+  if(state.game_state==='WIN' && state.win_aim)return state.win_aim;
+  if(state.player.respawn_lock>0 || state.aim_input_locked)return {x:state.player.facing,y:0};
+  const mouseWorld={x:renderCam.x-VIEW_HW+(mx/PX_PER_CM),y:renderCam.y+VIEW_HH-(my/PX_PER_CM)};
+  const raw={x:mouseWorld.x-playerPos.x,y:mouseWorld.y-playerPos.y};
+  return len(raw)<=EPS?{x:state.player.facing,y:0}:norm(raw);
+}
+
 let acc=0,last=performance.now();
 function loop(now){
   if (state.game_state==='RUN') {
     acc += Math.min(0.25,(now-last)/1000); last=now;
-    while (acc>=DT && state.game_state==='RUN') { updateLogic(); acc-=DT; }
+    while (acc>=DT && state.game_state==='RUN') {
+      renderPrevious=captureRenderState();
+      updateLogic(); acc-=DT;
+      if(state.game_state!=='RUN')renderPrevious=captureRenderState();
+    }
   } else last=now;
   render();
   requestAnimationFrame(loop);

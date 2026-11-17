@@ -180,6 +180,32 @@ test('feel baseline: collision blocks movement without sticking input, and blur 
   results.metrics.blocking={wallPreventsCrossing:true,inputResumesAfterWallRemoval:true,blurVelocity:blurStop.vx,postBlurDrift:blurSettled-blurStop.x};
 });
 
+
+test('render interpolation blends visual positions without mutating logic state and snaps teleports',async t=>{
+  const {run}=await openGame(t);
+  const measured=await run(`(() => {
+    renderPrevious=captureRenderState();
+    const playerStart=state.player.x,camStart=state.cam.x;
+    state.player.x=playerStart+1;
+    state.cam.x=camStart+1;
+    const playerMid=renderPosition('player',state.player,0.5);
+    const camMid=interpolateRenderPoint(renderPrevious.cam,state.cam,0.5,4);
+    const visualAim=renderAimDir(camMid,playerMid);
+    const mouseWorld={x:camMid.x-VIEW_HW+(mx/PX_PER_CM),y:camMid.y+VIEW_HH-(my/PX_PER_CM)};
+    const expectedAim=norm({x:mouseWorld.x-playerMid.x,y:mouseWorld.y-playerMid.y});
+    const logical={player:state.player.x,cam:state.cam.x};
+    const teleport=interpolateRenderPoint({x:0,y:0},{x:10,y:0},0.5,4);
+    return {playerStart,camStart,playerMid,camMid,visualAim,expectedAim,logical,teleport};
+  })()`);
+  assert.equal(measured.playerMid.x,measured.playerStart+0.5,'player visual position blends halfway between logic ticks');
+  assert.equal(measured.camMid.x,measured.camStart+0.5,'camera visual position blends halfway between logic ticks');
+  assert.ok(Math.abs(measured.visualAim.x-measured.expectedAim.x)<1e-12&&Math.abs(measured.visualAim.y-measured.expectedAim.y)<1e-12,'rendered aim indicator uses the interpolated camera/player frame');
+  assert.equal(measured.logical.player,measured.playerStart+1,'interpolation does not modify player simulation state');
+  assert.equal(measured.logical.cam,measured.camStart+1,'interpolation does not modify camera simulation state');
+  assert.equal(measured.teleport.x,10,'large respawn-like position changes snap instead of interpolating');
+  results.metrics.renderInterpolation={playerHalfStep:measured.playerMid.x-measured.playerStart,cameraHalfStep:measured.camMid.x-measured.camStart,logicStateUnchanged:true,teleportSnaps:true};
+});
+
 test('display baseline: full Canvas renders without overflow and produces a retained screenshot',async t=>{
   const {p,run}=await openGame(t);
   await p.clock.runFor(34);
