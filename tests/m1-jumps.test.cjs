@@ -150,3 +150,122 @@ test('M1 jumps: identical input ticks produce identical full state',async()=>{
     assert.deepEqual(a.plain('state'),b.plain('state'));
   }
 });
+
+function m1SetNearLanding(h,vx=0,dashUsed=false) {
+  h.run("Object.assign(state.player,{x:50,y:-23.65,vx:"+vx+",vy:-6,grounded:false,dash:null,slide:null,slide_jump:null,jump_ascend:false,grapple_inertia:false,respawn_lock:0,dash_used:"+dashUsed+"});");
+}
+test('M1 buffer: nine-tick early jump fires after touchdown without consuming double jump',async()=>{
+  const h=await game('#m1-buffer');m1SetNearLanding(h,6);h.tap('Space');
+  assert.ok(h.run('state.player.input_buffer.jump')>0,'landing jump intent is stored');
+  assert.ok(h.run('state.player.vy')<0,'air jump was not consumed prematurely');
+  assert.equal(h.run('state.player.jump_extension.air_available'),true);
+  let t=0;
+  while(h.run('state.player.vy')<=0 && t++<9)h.tick();
+  assert.ok(t<9,'touchdown consumes the pending request within the 9-tick window');
+  assert.ok(h.run('state.player.vy')>0);
+  assert.equal(h.run('state.player.jump_extension.air_available'),true,'fresh air jump remains after buffered ground launch');
+  assert.equal(h.run('state.player.input_buffer.jump'),0,'the buffered jump is single-use');
+});
+test('M1 buffer: away from any imminent ground, Space is still an immediate free double jump',async()=>{
+  const h=await game('#m1-buffer');air(h);h.tap('Space');
+  assert.equal(h.run('state.player.jump_extension.last'),'double');
+  assert.equal(h.run('state.player.input_buffer.jump'),0);
+  assert.equal(h.run('state.player.jump_extension.air_available'),false);
+});
+test('M1 buffer: eligible wall kick takes priority over a predicted floor landing',async()=>{
+  const h=await game('#m1-buffer');m1SetNearLanding(h);
+  h.run("state.rects.push({id:'BUFFER_WALL',type:'Wall',x:51.001,y:-23,w:1,h:10})");
+  h.tap('Space');
+  assert.equal(h.run('state.player.jump_extension.last'),'wall');
+  assert.equal(h.run('state.player.input_buffer.jump'),0);
+  assert.equal(h.run('state.player.vx'),-10);
+});
+test('M1 buffer: early jump expires if the landing surface disappears',async()=>{
+  const h=await game('#m1-buffer');m1SetNearLanding(h);h.tap('Space');
+  assert.ok(h.run('state.player.input_buffer.jump')>0);
+  h.run('state.rects=[]');h.tick(12);
+  assert.equal(h.run('state.player.input_buffer.jump'),0);
+  assert.equal(h.run('state.player.jump_extension.air_available'),true);
+  assert.ok(h.run('state.player.vy')<0);
+});
+test('M1 buffer: blur cancels early jump, preventing action on later ground contact',async()=>{
+  const h=await game('#m1-buffer');m1SetNearLanding(h);h.tap('Space');
+  assert.ok(h.run('state.player.input_buffer.jump')>0);
+  h.event('blur');assert.equal(h.run('state.player.input_buffer.jump'),0);
+  h.tick(10);
+  assert.equal(h.run('state.player.grounded'),true);
+  assert.equal(h.run('state.player.jump_extension.air_available'),true);
+  assert.equal(h.run('state.player.vy'),0);
+});
+test('M1 buffer: spent-air-Dash Shift arms ground slide at touchdown',async()=>{
+  const h=await game('#m1-buffer');m1SetNearLanding(h,5,true);
+  h.down('KeyD');h.tap('ShiftLeft');
+  assert.ok(h.run('state.player.input_buffer.slide')>0);
+  assert.equal(h.run('state.player.dash'),null,'spent Dash is not reactivated');
+  let ticks=0;while(!h.run('state.player.slide') && ticks++<9)h.tick();
+  assert.ok(ticks<9,'the early Shift becomes a slide on landing');
+  assert.ok(h.run('state.player.slide.dir')>0);
+  assert.equal(h.run('state.player.input_buffer.slide'),0);
+  h.up('KeyD');
+});
+test('M1 buffer: unspent airborne Shift stays Dash, not a queued slide',async()=>{
+  const h=await game('#m1-buffer');m1SetNearLanding(h,5,false);
+  h.run('state.player.st=100');h.down('KeyD');h.tap('ShiftLeft');
+  assert.equal(h.run('state.player.input_buffer.slide'),0);
+  assert.ok(h.run('state.player.dash'),'regular Shift air Dash still executes');
+  h.up('KeyD');
+});
+test('M1 buffer: land steering decelerates without snapping current vx to zero',async()=>{
+  const h=await game('#m1-buffer');
+  h.run("Object.assign(state.player,{x:50,y:-23.999,vx:15,vy:0,grounded:true,dash:null,slide:null,slide_jump:null,grapple_inertia:false,jump_ascend:false})");
+  h.tick();const v=h.run('state.player.vx');
+  assert.ok(v>13 && v<15,'neutral ground friction is acceleration limited');
+  h.tick();assert.ok(h.run('state.player.vx')>0 && h.run('state.player.vx')<v);
+  h.down('KeyD');h.tick();assert.ok(h.run('state.player.vx')>8,'ground reverse toward running speed is gradual');
+  h.up('KeyD');
+});
+test('M1 buffer: ending slide retains its real horizontal velocity until friction',async()=>{
+  const h=await game('#m1-buffer');
+  h.run('Object.assign(state.player,{vx:7,grounded:true,slide:{dir:1,frames:10,t:0.16},crouch:false});finishSlide()');
+  assert.equal(h.run('state.player.vx'),7);
+  assert.equal(h.run('state.player.slide'),null);
+  h.tick();assert.ok(h.run('state.player.vx')>0 && h.run('state.player.vx')<7);
+});
+test('M1 buffer: respawn discards buffered actions and locks held jump',async()=>{
+  const h=await game('#m1-buffer');m1SetNearLanding(h);h.tap('Space');
+  assert.ok(h.run('state.player.input_buffer.jump')>0);
+  h.run('respawn()');assert.equal(h.run('state.player.input_buffer'),null);
+  h.down('Space');h.tick();assert.equal(h.run('input.Jump.just_pressed'),false);
+  assert.equal(h.run('state.player.input_buffer.jump'),0);
+  assert.equal(h.run('state.player.vy'),0);
+  h.up('Space');
+});
+test('M1 buffer: 9-tick timer does not re-fire a ground jump after it is consumed',async()=>{
+  const h=await game('#m1-buffer');m1SetNearLanding(h);h.tap('Space');
+  for(let i=0;i<18;i++)h.tick();
+  assert.equal(h.run('state.player.input_buffer.jump'),0);
+  assert.equal(h.run('state.player.jump_extension.air_available'),true);
+});
+test('M1 buffer: repeat inputs and movement produce deterministic state each simulation frame',async()=>{
+  const a=await game('#m1-buffer'),b=await game('#m1-buffer');
+  m1SetNearLanding(a,6);m1SetNearLanding(b,6);
+  for(let i=0;i<35;i++) {
+    for(const h of [a,b]){
+      if(i===0)h.down('Space');if(i===1)h.up('Space');
+      if(i===4)h.down('KeyD');if(i===10)h.up('KeyD');
+      if(i===13)h.down('ShiftLeft');if(i===14)h.up('ShiftLeft');
+      if(i===18)h.event('blur');
+      h.tick();
+    }
+    assert.deepEqual(a.plain('state'),b.plain('state'));
+  }
+});
+for(const hash of ['', '#m1-jumps', '#m1-controls', '#m1-swing'])
+test('M1 buffer: older hash does not acquire landing-buffer mechanics '+hash,async()=>{
+  const h=await game(hash);
+  m1SetNearLanding(h);
+  h.tap('Space');
+  assert.equal(h.run('state.player.input_buffer'),null);
+  if(hash==='#m1-jumps')assert.equal(h.run('state.player.jump_extension.last'),'double');
+  if(hash==='')assert.ok(h.run('state.player.dash'));
+});
