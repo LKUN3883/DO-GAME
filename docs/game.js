@@ -2,8 +2,14 @@ const DT = 1 / 60;
 // Experimental only: append #slide-jump-momentum to enable slide-jump carry.
 // Opt-in v1.1 keyboard input profile. #m1-controls also includes M1 rope and
 // slide-jump physics; the legacy URL and all older experiment hashes are stable.
+// Opt-in v1.1 motion timings: 18-tick slide, 9-tick air Dash.
+const m1TimingEnabled = () => typeof location !== 'undefined' && location.hash === '#m1-timing';
+const M1_SLIDE_FRAMES = 18; // 0.30s, within the 0.25-0.35s spec
+const M1_DASH_FRAMES = 9; // 0.15s at fixed 60Hz
+const M1_SLIDE_HEIGHT = 1.2; // 40% lower than the 2-unit standing body
+const M1_SLIDE_IFRAMES = 6; // 0.10s
 // Independent 9-tick jump / spent-Dash-to-slide landing-buffer prototype.
-const m1BufferEnabled = () => typeof location !== 'undefined' && location.hash === '#m1-buffer';
+const m1BufferEnabled = () => typeof location !== 'undefined' && (location.hash === '#m1-buffer' || m1TimingEnabled());
 const M1_BUFFER_FRAMES = 9;
 const m1JumpsEnabled = () => typeof location !== 'undefined' && (location.hash === '#m1-jumps' || m1BufferEnabled());
 const m1ControlsEnabled = () => typeof location !== 'undefined' && (location.hash === '#m1-controls' || m1JumpsEnabled());
@@ -392,7 +398,10 @@ function prepareStance(input_x,pulling) {
   if(p.grounded && input_x!==0 && slidePressed &&
      !(m1BufferEnabled() && p.input_buffer.jump>0)) {
     if(bufferedSlide)p.input_buffer.slide=0;
-    p.slide={dir:p.facing,t:0,frames:0};p.crouch=false;setPlayerHeight(1);return;
+    p.slide={dir:p.facing,t:0,frames:0};p.crouch=false;
+    setPlayerHeight(m1TimingEnabled()?M1_SLIDE_HEIGHT:1);
+    if(m1TimingEnabled())p.iframe=Math.max(p.iframe,M1_SLIDE_IFRAMES*DT);
+    return;
   }
   const crouch=(p.grounded && (m1ControlsEnabled() || input_x===0) && input.S.down) ||
     (p.crouch && input.S.down) || !canStandPlayer();
@@ -514,7 +523,9 @@ function updateLogic() {
   // Shift has one input event and chooses slide on ground or Dash in air.
   const dashPressed=m1ControlsEnabled()?input.Dash.just_pressed:input.Jump.just_pressed;
   if (!jumpedThisFrame && !p.grounded && !p.dash && !pulling && dashPressed && !p.dash_used) {
-    if (p.st>=30) { p.st-=30; p.dash_used=true; p.dash={dir:aim,left:6}; p.slide_jump=null;p.grapple_inertia=false;
+    if (p.st>=30) { p.st-=30; p.dash_used=true;
+      p.dash={dir:aim,left:m1TimingEnabled()?50*DT*M1_DASH_FRAMES:6};
+      p.slide_jump=null;p.grapple_inertia=false;
       if(m1JumpsEnabled()){p.jump_extension.carry=false;p.jump_ascend=false;}
       if(m1BufferEnabled()){p.input_buffer.jump=0;p.input_buffer.slide=0;}
       p.vx=0; p.vy=0; }
@@ -538,11 +549,35 @@ function updateLogic() {
       if(p.slide.t>=0.9 || !p.grounded || p.vx===0){p.slide=null;p.crouch=p.h===1;}
     }
   } else if (p.dash) {
-    const step = Math.min(50*DT,p.dash.left);
-    p.vx = p.dash.dir.x*50; p.vy = p.dash.dir.y*50;
-    const blocked = resolveAxis(p,p.dash.dir.x*step,p.dash.dir.y*step);
-    p.dash.left -= step;
-    if (p.dash.left<=EPS || blocked) { p.dash=null; p.vx=0; p.vy=0; }
+    const activeDash=p.dash;
+    const step=Math.min(50*DT,activeDash.left);
+    p.vx=activeDash.dir.x*50;p.vy=activeDash.dir.y*50;
+    let blocked=false;
+    if(m1TimingEnabled()){
+      // At 50 units/s the 60Hz frame advances 0.833 units. Break this into
+      // <=0.25-unit steps so thin walls and diagonal corners cannot tunnel.
+      const dx=activeDash.dir.x*step,dy=activeDash.dir.y*step;
+      const slices=Math.max(1,Math.ceil(Math.max(Math.abs(dx),Math.abs(dy))/0.25));
+      for(let k=0;k<slices;k++){
+        blocked=resolveAxis(p,dx/slices,dy/slices);
+        if(blocked)break;
+      }
+    } else blocked=resolveAxis(p,activeDash.dir.x*step,activeDash.dir.y*step);
+    activeDash.left-=step;
+    if(activeDash.left<=EPS || blocked || (m1TimingEnabled() && p.grounded)) {
+      p.dash=null;
+      if(m1TimingEnabled()){
+        // Let the collision resolver keep the unblocked tangent component.
+        // On a normal dash expiry, inherit a capped exit impulse (8 units/s)
+        // rather than stopping dead or resuming stale slide-jump velocity.
+        if(!blocked && !p.grounded){
+          p.vx=activeDash.dir.x*8;p.vy=activeDash.dir.y*8;
+        }
+        if(!p.grounded && p.jump_extension)p.jump_extension.carry=true;
+        else if(p.jump_extension)p.jump_extension.carry=false;
+        if(p.grounded)p.vy=0;
+      } else {p.vx=0;p.vy=0;}
+    }
   } else {
     if(m1JumpsEnabled() && p.jump_extension?.carry && !p.grounded) {
       if(!jumpedThisFrame) {
@@ -562,7 +597,11 @@ function updateLogic() {
       }
     } else if (p.slide) {
       p.slide.t=(p.slide.frames??Math.round(p.slide.t/DT))*DT;
-      p.vx=p.slide.dir*Math.max(0,10-(10/0.9)*p.slide.t);
+      if(m1TimingEnabled()){
+        // Start fast, leave at running speed instead of braking to zero.
+        const progress=clamp((p.slide.frames??0)/(M1_SLIDE_FRAMES-1),0,1);
+        p.vx=p.slide.dir*(10-2*progress);
+      } else p.vx=p.slide.dir*Math.max(0,10-(10/0.9)*p.slide.t);
     } else if(grappleMomentumEnabled() && p.grapple_inertia && !p.grounded){
       const desired=input_x*8;
       const limit=(input_x===0?5:45)*DT;
@@ -571,7 +610,8 @@ function updateLogic() {
       // Velocity is continuous across the airborne/grounded boundary.
       // Ground acceleration / friction are tuned separately from air steering.
       const desired=p.crouch?0:input_x*8;
-      const accel=p.grounded?(input_x!==0?70:45):(input_x!==0?45:5);
+      // 8/70 = 0.114s to accelerate; neutral ground 8/100 = 0.08s to stop.
+      const accel=p.grounded?(input_x!==0?70:(m1TimingEnabled()?100:45)):(input_x!==0?45:5);
       p.vx+=clamp(desired-p.vx,-accel*DT,accel*DT);
     } else p.vx=p.crouch?0:input_x*8;
     if (!p.jump_ascend) p.vy=Math.max(-15,p.vy-180*DT);
@@ -579,7 +619,7 @@ function updateLogic() {
     const blocked=resolveAxis(p,p.vx*DT,p.vy*DT);
     if(p.slide) {
       p.slide.frames=(p.slide.frames??0)+1;
-      if(!p.grounded || p.vx===0 || p.slide.frames>=54)finishSlide();
+      if(!p.grounded || p.vx===0 || p.slide.frames>=(m1TimingEnabled()?M1_SLIDE_FRAMES:54))finishSlide();
     }
   }
   if(p.grounded){p.dash_used=false;if(p.slide_jump)p.slide_jump=null;p.grapple_inertia=false;
