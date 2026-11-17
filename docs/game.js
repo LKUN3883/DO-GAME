@@ -1,4 +1,6 @@
 const DT = 1 / 60;
+// Experimental only: append #slide-jump-momentum to enable slide-jump carry.
+const slideJumpMomentumEnabled = () => typeof location !== 'undefined' && location.hash === '#slide-jump-momentum';
 const EPS = 0.001;
 const PX_PER_CM = 40;
 const VIEW_W = 32;
@@ -81,7 +83,7 @@ function resetAll() {
   const enemies = [...level.enemies].sort((a,b)=>idCompare(a.id,b.id)).map(e=>({ ...e, alive:true, discovered:false, exclaim_t:0, grounded:false, vx:0, vy:0, melee_cd:0, shoot_cd:0 }));
   state = {
     game_state:'RUN',
-    player:{x:p.x,y:p.y,vx:0,vy:0,w:1,h:2,facing:p.facing,grounded:false,standing_oneway_id:'',ignore_oneway_id:'',ignore_timer:0,hp:100,st:100,ammo:60,iframe:0,dash_used:false,dash:null,jump_t:0,jump_ascend:false,crouch:false,slide:null,melee:null,respawn_lock:0},
+    player:{x:p.x,y:p.y,vx:0,vy:0,w:1,h:2,facing:p.facing,grounded:false,standing_oneway_id:'',ignore_oneway_id:'',ignore_timer:0,hp:100,st:100,ammo:60,iframe:0,dash_used:false,dash:null,jump_t:0,jump_ascend:false,crouch:false,slide:null,slide_jump:null,melee:null,respawn_lock:0},
     boss:{...level.boss, alive:true, hp:420, vx:0, vy:0, grounded:false, active:false, dead:false, death_t:0, phase:'rifle', phase_t:2, shoot_cd:0, shot_count:0, charge_t:0, charge_pending:false, warning_t:0, charge:null},
     rects, enemies, projectiles:[], spawn_seq:0,
     grapple:emptyGrapple(),
@@ -199,7 +201,7 @@ function updateGrapple() {
     if (group===characters) g.local={x:g.anchor.x-target.x,y:g.anchor.y-target.y};
     g.mode='pull'; h.x=g.anchor.x; h.y=g.anchor.y; h.vx=0; h.vy=0;
     // Pull overrides ongoing aerial movement; no suspended Dash/ascent resumes later.
-    state.player.dash=null; state.player.jump_ascend=false;
+    state.player.dash=null; state.player.jump_ascend=false; state.player.slide_jump=null;
     if (Math.hypot(g.anchor.x-state.player.x,g.anchor.y-state.player.y)<=0.8+EPS) endGrapple();
     return;
   }
@@ -338,11 +340,15 @@ function updateLogic() {
 
   prepareStance(input_x,pulling);
   const jumpedThisFrame = !pulling && p.grounded && input.Jump.just_pressed && !downThrough && canStandPlayer();
-  if (jumpedThisFrame) { p.crouch=false;p.slide=null;setPlayerHeight(2);p.vy=53.334; p.jump_ascend=true; p.jump_t=0; }
+  if (jumpedThisFrame) {
+    const slideLaunch=slideJumpMomentumEnabled() && p.slide ? {vx:p.vx,dir:p.slide.dir,t:0} : null;
+    p.crouch=false;p.slide=null;p.slide_jump=slideLaunch;setPlayerHeight(2);
+    p.vy=53.334; p.jump_ascend=true; p.jump_t=0;
+  }
   if (p.jump_ascend) { p.jump_t+=DT; if (p.jump_t>0.3||p.vy<=0) p.jump_ascend=false; }
 
   if (!jumpedThisFrame && !p.grounded && !p.dash && !pulling && input.Jump.just_pressed && !p.dash_used) {
-    if (p.st>=30) { p.st-=30; p.dash_used=true; p.dash={dir:aim,left:6}; p.vx=0; p.vy=0; }
+    if (p.st>=30) { p.st-=30; p.dash_used=true; p.dash={dir:aim,left:6}; p.slide_jump=null; p.vx=0; p.vy=0; }
     else { state.hint={text:'体力不足',t:0.5}; }
   }
 
@@ -366,7 +372,18 @@ function updateLogic() {
     p.dash.left -= step;
     if (p.dash.left<=EPS || blocked) { p.dash=null; p.vx=0; p.vy=0; }
   } else {
-    if (p.slide) {
+    if(p.slide_jump && (jumpedThisFrame || !p.grounded)) {
+      // Preserve launch speed on the jump tick. Thereafter steer from CURRENT velocity,
+      // so D/A/D changes are acceleration-limited and cannot jump back to the launch vector.
+      // Experimental tuning: 90 cm/s^2 directional acceleration, 5 cm/s^2 neutral air drag.
+      if(jumpedThisFrame) p.vx=p.slide_jump.vx;
+      else {
+        p.slide_jump.t+=DT;
+        const desired=input_x*8;
+        const accel=input_x===0?5:90;
+        p.vx+=clamp(desired-p.vx,-accel*DT,accel*DT);
+      }
+    } else if (p.slide) {
       p.slide.t=(p.slide.frames??Math.round(p.slide.t/DT))*DT;
       p.vx=p.slide.dir*Math.max(0,10-(10/0.9)*p.slide.t);
     } else p.vx=p.crouch?0:input_x*8;
@@ -378,7 +395,7 @@ function updateLogic() {
       if(!p.grounded || p.vx===0 || p.slide.frames>=54)finishSlide();
     }
   }
-  if(p.grounded)p.dash_used=false;
+  if(p.grounded){p.dash_used=false;if(p.slide_jump)p.slide_jump=null;}
   if(!pulling)separatePlayerBodies();
   updateCamera();
   attackQueue=[];
@@ -695,7 +712,7 @@ function respawn() {
   const p=state.player;
   Object.assign(p,{vx:0,vy:0,w:1,h:2,hp:100,st:100,ammo:60,dash_used:false,dash:null,
     grounded:false,standing_oneway_id:'',iframe:0,ignore_oneway_id:'',ignore_timer:0,
-    jump_ascend:false,jump_t:0,slide:null,crouch:false,melee:null,respawn_lock:1});
+    jump_ascend:false,jump_t:0,slide:null,slide_jump:null,crouch:false,melee:null,respawn_lock:1});
   function place(point) {
     p.x=point?.respawn_x??level.player_spawn.x;p.y=point?.respawn_y??level.player_spawn.y;
     p.facing=point?.respawn_facing??level.player_spawn.facing;
