@@ -398,6 +398,78 @@ test('default hash keeps existing slide-jump behavior and reset removes experime
   assert.equal(await run('state.player.slide_jump'),null);
 });
 
+test('M1 opt-in: wall anchor becomes a physical rope, permits tangential motion and detaches with velocity',async t=>{
+  const {p,run}=await openGame(t);
+  await run("location.hash='#m1-swing';state.enemies=[];state.projectiles=[];"+
+    "state.rects=[{id:'M1_WALL',type:'Wall',x:55,y:-20,w:1,h:38}];"+
+    "Object.assign(state.player,{x:50,y:-20,vx:0,vy:0,grounded:false,slide:null,slide_jump:null,grapple_inertia:false,dash:null,jump_ascend:false,respawn_lock:0});"+
+    "state.cam={x:50,y:-20};mx=1279;my=360;keyRaw.clear();");
+  await p.mouse.down({button:'right'});
+  let travel=0;
+  while(await run("!['rope_slack','rope_taut'].includes(state.grapple.mode)")&&travel<30){await tick(p);travel++;}
+  const anchor=await run("({mode:state.grapple.mode,L:state.grapple.rope_length,anchor:state.grapple.anchor})");
+  assert.ok(['rope_slack','rope_taut'].includes(anchor.mode),'terrain hit chooses the M1 rope owner, not linear pull');
+  assert.ok(anchor.L>1.25,'rope has a finite measured length');
+  await p.keyboard.down('d');
+  const positions=[];
+  for(let i=0;i<38;i++){
+    await tick(p);
+    positions.push(await run("({x:state.player.x,y:state.player.y,vx:state.player.vx,vy:state.player.vy,mode:state.grapple.mode,d:Math.hypot(state.player.x-state.grapple.anchor.x,state.player.y-state.grapple.anchor.y),L:state.grapple.rope_length,penetrating:state.rects.some(r=>penetrates(aabb(state.player),aabb(r)))})"));
+  }
+  await p.keyboard.up('d');
+  assert.ok(positions.every(x=>x.mode!=='stuck'),'wall contacts cannot turn a fixed rope into STUCK');
+  assert.ok(positions.every(x=>!x.penetrating),'wall motion never penetrates blocking geometry');
+  assert.ok(Math.max(...positions.map(x=>x.d-x.L))<0.15,'rope length stays bounded after collision-aware correction');
+  assert.ok(Math.abs(positions.at(-1).y-positions[0].y)>0.2,'character travels along the wall instead of freezing in place');
+  await p.mouse.up({button:'right'});await tick(p);
+  const released=await run("({mode:state.grapple.mode,carry:state.player.grapple_inertia,vx:state.player.vx,vy:state.player.vy,slideJump:state.player.slide_jump})");
+  assert.equal(released.mode,'none','right mouse release detaches the rope');
+  assert.equal(released.carry,true,'midair detach passes momentum to airborne motion');
+  assert.ok(Math.hypot(released.vx,released.vy)>0.1,'release retains nonzero tangential velocity');
+  assert.equal(released.slideJump,null,'rope handoff must not resurrect earlier slide-jump state');
+  results.metrics.m1Rope={anchorTicks:travel,ropeLength:anchor.L,maxStretch:Math.max(...positions.map(x=>x.d-x.L)),
+    yTravel:positions.at(-1).y-positions[0].y,releaseVelocity:{x:released.vx,y:released.vy},wallPenetration:false};
+});
+
+test('M1 priority: slide-jump to air Dash to terrain grapple clears old owners, respawn drops carry',async t=>{
+  const {p,run}=await openGame(t);
+  await run("location.hash='#m1-swing';state.enemies=[];state.projectiles=[];keyRaw.clear();mx=1279;my=360");
+  await p.keyboard.down('d');await p.keyboard.down('s');await tick(p);
+  const slid=await run("({slide:!!state.player.slide,vx:state.player.vx})");
+  assert.ok(slid.slide,'the combined experiment can start the production slide');
+  await p.keyboard.down('Space');await tick(p);await p.keyboard.up('Space');
+  const jumped=await run("({carry:!!state.player.slide_jump,vx:state.player.vx})");
+  assert.ok(jumped.carry,'slide-jump remains available behind the unified M1 flag');
+  assert.ok(jumped.vx>0,'sliding momentum is inherited');
+  await p.keyboard.up('d');await tick(p);
+  await p.keyboard.down('Space');await tick(p);await p.keyboard.up('Space');
+  const dash=await run("({dash:!!state.player.dash,slideJump:state.player.slide_jump})");
+  assert.equal(dash.dash,true,'air Dash takes over');
+  assert.equal(dash.slideJump,null,'air Dash discards the older slide-jump owner');
+  await run("state.rects=[{id:'M1_HOOK_WALL',type:'Wall',x:12,y:-20,w:1,h:40}];"+
+    "Object.assign(state.player,{x:10,y:-20,vx:6,vy:-2,grounded:false,respawn_lock:0,dash:{dir:{x:1,y:0},left:6},slide_jump:{vx:10,dir:1,t:0}});"+
+    "state.grapple={...emptyGrapple(),mode:'fly',head:{x:11.55,y:-20,w:0.3,h:0.3,vx:28,vy:0,origin:{x:11.55,y:-20}},end:false};"+
+    "updateGrapple()");
+  const hooked=await run("({mode:state.grapple.mode,dash:state.player.dash,carry:state.player.slide_jump,ropeLength:state.grapple.rope_length})");
+  assert.ok(['rope_slack','rope_taut'].includes(hooked.mode),'terrain hook is captured as rope');
+  assert.equal(hooked.dash,null,'rope takeover ends Dash');
+  assert.equal(hooked.carry,null,'rope takeover ends slide-jump even after Dash');
+  assert.ok(hooked.ropeLength>=1.25);
+  await run("state.player.vx=4;state.player.vy=3;state.player.grounded=false;endGrapple('release');cleanup();");
+  const detached=await run("({carry:state.player.grapple_inertia,mode:state.grapple.mode,vx:state.player.vx,vy:state.player.vy})");
+  assert.equal(detached.carry,true,'rope handoff leaves an airborne momentum owner');
+  assert.equal(detached.mode,'none');
+  assert.equal(detached.vx,4);
+  await run("respawn()");
+  const reset=await run("({carry:state.player.grapple_inertia,slideJump:state.player.slide_jump,dash:state.player.dash,rope:state.grapple.mode,vx:state.player.vx,vy:state.player.vy})");
+  assert.deepEqual(reset,{carry:false,slideJump:null,dash:null,rope:'none',vx:0,vy:0},
+    'respawn clears every airborne movement owner');
+  await run("location.hash='';Object.assign(state.player,{vx:9,vy:8,grounded:false,respawn_lock:0});state.grapple={...emptyGrapple(),mode:'pull',end:false};endGrapple('release');");
+  const baseline=await run("({vx:state.player.vx,vy:state.player.vy,carry:state.player.grapple_inertia})");
+  assert.deepEqual(baseline,{vx:0,vy:0,carry:false},'default hash preserves old frozen momentum behavior');
+  results.metrics.m1Owners={slideJump:true,airDash:true,ropeTakeover:true,respawnClearsAll:true,defaultUnchanged:true};
+});
+
 test('display baseline: full Canvas renders without overflow and produces a retained screenshot',async t=>{
   const {p,run}=await openGame(t);
   await p.clock.runFor(34);
