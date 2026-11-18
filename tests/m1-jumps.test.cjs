@@ -511,5 +511,7 @@ for(const hash of ['', '#m1-timing', '#m1-buffer'])test('M1 geometry: previous p
   assert.equal(h.run('m1GeometryEnabled()'),false);
   assert.equal(h.run('m1RopeEnabled()'),hash!=='');
   h.run("state.rects=[{id:'Z',type:'Wall',x:51.001,y:-12.5,w:1,h:5},{id:'A',type:'Wall',x:51.001,y:-17.5,w:1,h:5}]");
-  // Earlier modes still use collider IDs directly, never the unified key.\n  h.run("Object.assign(state.player,{x:50,y:-12,vy:-1,grounded:false})");\n  assert.equal(h.run('m1JumpWall().key'),'Z:-1');
+  // Earlier modes still use collider IDs directly, never the unified key.
+  h.run("Object.assign(state.player,{x:50,y:-12,vy:-1,grounded:false})");
+  assert.equal(h.run('m1JumpWall().key'),'Z:-1');
 });
