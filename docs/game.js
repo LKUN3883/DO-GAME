@@ -3,7 +3,8 @@ const DT = 1 / 60;
 // Opt-in v1.1 keyboard input profile. #m1-controls also includes M1 rope and
 // slide-jump physics; the legacy URL and all older experiment hashes are stable.
 // Opt-in v1.1 motion timings: 18-tick slide, 9-tick air Dash.
-const m1TimingEnabled = () => typeof location !== 'undefined' && location.hash === '#m1-timing';
+const m1GeometryEnabled = () => typeof location !== 'undefined' && location.hash === '#m1-geometry';
+const m1TimingEnabled = () => typeof location !== 'undefined' && (location.hash === '#m1-timing' || m1GeometryEnabled());
 const M1_SLIDE_FRAMES = 18; // 0.30s, within the 0.25-0.35s spec
 const M1_DASH_FRAMES = 9; // 0.15s at fixed 60Hz
 const M1_SLIDE_HEIGHT = 1.2; // 40% lower than the 2-unit standing body
@@ -195,6 +196,12 @@ function refreshGrappleAnchor() {
     g.head.x=g.anchor.x; g.head.y=g.anchor.y;
   }
 }
+// Geometry opt-in: collision-resolve long corrections in short pieces rather
+// than teleporting over a thin wall or a collision corner in a single tick.
+function m1RopeCollisionSteps(obj,dx,dy) {
+  const parts=Math.max(1,Math.ceil(Math.hypot(dx,dy)/0.2));
+  for(let i=0;i<parts;i++)resolveAxis(obj,dx/parts,dy/parts);
+}
 // Fixed-length rope constraint: gravity and input change velocity, while the
 // rope removes only OUTWARD radial motion. Tangential velocity is preserved.
 // Terrain is resolved before/while correcting stretch, so a wall cannot be
@@ -215,17 +222,25 @@ function moveRopePlayer(input_x,separateBodies=()=>{}) {
     const outward=(p.vx*(p.x-g.anchor.x)+p.vy*(p.y-g.anchor.y))/startDist;
     if(outward>0){p.vx-=outward*(p.x-g.anchor.x)/startDist;p.vy-=outward*(p.y-g.anchor.y)/startDist;}
   }
-  resolveAxis(p,p.vx*DT,p.vy*DT);
+  if(m1GeometryEnabled())m1RopeCollisionSteps(p,p.vx*DT,p.vy*DT);
+  else resolveAxis(p,p.vx*DT,p.vy*DT);
   const rx=p.x-g.anchor.x,ry=p.y-g.anchor.y;
   const dist=Math.hypot(rx,ry);
   if(dist>rope+EPS){
     const excess=dist-rope;
     // Collision-aware correction keeps the tangential component if the wall
     // blocks only the inward correction's horizontal component.
-    resolveAxis(p,-rx/dist*excess,-ry/dist*excess);
+    if(m1GeometryEnabled())m1RopeCollisionSteps(p,-rx/dist*excess,-ry/dist*excess);
+    else resolveAxis(p,-rx/dist*excess,-ry/dist*excess);
   }
   const finalR={x:p.x-g.anchor.x,y:p.y-g.anchor.y};
   const finalDist=Math.hypot(finalR.x,finalR.y);
+  if(m1GeometryEnabled() && finalDist>rope+0.15){
+    // There is no rope wrapping implementation yet. When a solid blocks
+    // the inward correction, detach safely instead of stretching forever,
+    // forcing the player through it, or adding an unearned launch impulse.
+    endGrapple('obstructed');separateBodies();return;
+  }
   if(finalDist>=rope-0.02 && finalDist>EPS){
     const outward=dot({x:p.vx,y:p.vy},norm(finalR));
     if(outward>0){const n=norm(finalR);p.vx-=outward*n.x;p.vy-=outward*n.y;}
@@ -417,6 +432,28 @@ function playerDied() {
 function resetM1JumpState() {
   return {air_available:true,walls:[],carry:false,last:'ground'};
 }
+// Connected coplanar collider faces are ONE wall for jump allowance. This
+// prevents a tall wall made from many adjoining rectangles granting a fresh
+// kick at each seam. Separate/offset faces remain distinct surfaces.
+function m1WallSurfaceKey(rect,away) {
+  const colliders=blockers(false);
+  const faceOf=r=>away<0?r.x-r.w/2:r.x+r.w/2;
+  const targetFace=faceOf(rect);
+  const eligible=colliders.filter(r=>Math.abs(faceOf(r)-targetFace)<=EPS);
+  const component=new Set([rect.id]);
+  let grown=true;
+  while(grown){
+    grown=false;
+    for(const candidate of eligible){
+      if(component.has(candidate.id))continue;
+      const adjacent=eligible.some(r=>component.has(r.id) &&
+        Math.min(candidate.y+candidate.h/2,r.y+r.h/2) >=
+        Math.max(candidate.y-candidate.h/2,r.y-r.h/2)-EPS);
+      if(adjacent){component.add(candidate.id);grown=true;}
+    }
+  }
+  return [...component].sort(idCompare)[0]+':'+away;
+}
 function m1JumpWall() {
   const p=state.player,b=aabb(p),hits=[];
   for(const r of blockers(false)) {
@@ -424,7 +461,10 @@ function m1JumpWall() {
     const vertical=Math.min(b.max_y,box.max_y)-Math.max(b.min_y,box.min_y);
     if(vertical<=0.25)continue; // floors/ceilings and grazing corners are not walls
     for(const [gap,away] of [[box.min_x-b.max_x,-1],[b.min_x-box.max_x,1]]) {
-      if(gap>=-EPS && gap<=0.02)hits.push({key:r.id+':'+away,gap,away});
+      if(gap>=-EPS && gap<=0.02)hits.push({
+        key:m1GeometryEnabled()?m1WallSurfaceKey(r,away):r.id+':'+away,
+        gap,away
+      });
     }
   }
   hits.sort((a,b)=>a.gap-b.gap||idCompare(a.key,b.key));
