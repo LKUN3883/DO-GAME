@@ -1,4 +1,23 @@
 const DT = 1 / 60;
+// Experimental only: append #slide-jump-momentum to enable slide-jump carry.
+// Opt-in v1.1 keyboard input profile. #m1-controls also includes M1 rope and
+// slide-jump physics; the legacy URL and all older experiment hashes are stable.
+// Opt-in v1.1 motion timings: 18-tick slide, 9-tick air Dash.
+const m1GeometryEnabled = () => typeof location !== 'undefined' && location.hash === '#m1-geometry';
+const m1TimingEnabled = () => typeof location !== 'undefined' && (location.hash === '#m1-timing' || m1GeometryEnabled());
+const M1_SLIDE_FRAMES = 18; // 0.30s, within the 0.25-0.35s spec
+const M1_DASH_FRAMES = 9; // 0.15s at fixed 60Hz
+const M1_SLIDE_HEIGHT = 1.2; // 40% lower than the 2-unit standing body
+const M1_SLIDE_IFRAMES = 6; // 0.10s
+// Independent 9-tick jump / spent-Dash-to-slide landing-buffer prototype.
+const m1BufferEnabled = () => typeof location !== 'undefined' && (location.hash === '#m1-buffer' || m1TimingEnabled());
+const M1_BUFFER_FRAMES = 9;
+const m1JumpsEnabled = () => typeof location !== 'undefined' && (location.hash === '#m1-jumps' || m1BufferEnabled());
+const m1ControlsEnabled = () => typeof location !== 'undefined' && (location.hash === '#m1-controls' || m1JumpsEnabled());
+const m1RopeEnabled = () => typeof location !== 'undefined' && (location.hash === '#m1-swing' || m1ControlsEnabled());
+const slideJumpMomentumEnabled = () => typeof location !== 'undefined' && (location.hash === '#slide-jump-momentum' || m1RopeEnabled());
+// Opt-in physics prototypes can also be compared separately from the old build.
+const grappleMomentumEnabled = () => typeof location !== 'undefined' && (location.hash === '#grapple-momentum' || m1RopeEnabled());
 const EPS = 0.001;
 const PX_PER_CM = 40;
 const VIEW_W = 32;
@@ -15,13 +34,14 @@ const input = {
   D: { down: false, prev: false, just_pressed: false, just_released: false },
   S: { down: false, prev: false, just_pressed: false, just_released: false },
   Jump: { down: false, prev: false, just_pressed: false, just_released: false },
+  Dash: { down: false, prev: false, just_pressed: false, just_released: false },
   F: { down: false, prev: false, just_pressed: false, just_released: false },
   LMB: { down: false, prev: false, just_pressed: false, just_released: false },
   RMB: { down: false, prev: false, just_pressed: false, just_released: false },
 };
 let mx = 640; let my = 360;
 
-const gameKeys = new Set(['KeyA','KeyD','KeyS','KeyW','Space','KeyF']);
+const gameKeys = new Set(['KeyA','KeyD','KeyS','KeyW','Space','KeyF','KeyJ','KeyK','KeyU','ShiftLeft','ShiftRight']);
 window.addEventListener('keydown', (e) => {
   if (gameKeys.has(e.code)) e.preventDefault();
   keyRaw.set(e.code, true);
@@ -33,6 +53,11 @@ window.addEventListener('keyup', (e) => {
 // A lost keyup must never leave the player moving indefinitely.
 function releaseAllInputs() {
   keyRaw.clear();
+  // Cached button intents must not execute after Alt+Tab / lost focus.
+  if(state?.player?.input_buffer) {
+    state.player.input_buffer.jump=0;
+    state.player.input_buffer.slide=0;
+  }
 }
 window.addEventListener('blur', releaseAllInputs);
 document.addEventListener('visibilitychange', () => {
@@ -81,7 +106,7 @@ function resetAll() {
   const enemies = [...level.enemies].sort((a,b)=>idCompare(a.id,b.id)).map(e=>({ ...e, alive:true, discovered:false, exclaim_t:0, grounded:false, vx:0, vy:0, melee_cd:0, shoot_cd:0 }));
   state = {
     game_state:'RUN',
-    player:{x:p.x,y:p.y,vx:0,vy:0,w:1,h:2,facing:p.facing,grounded:false,standing_oneway_id:'',ignore_oneway_id:'',ignore_timer:0,hp:100,st:100,ammo:60,iframe:0,dash_used:false,dash:null,jump_t:0,jump_ascend:false,crouch:false,slide:null,melee:null,respawn_lock:0},
+    player:{x:p.x,y:p.y,vx:0,vy:0,w:1,h:2,facing:p.facing,grounded:false,standing_oneway_id:'',ignore_oneway_id:'',ignore_timer:0,hp:100,st:100,ammo:60,iframe:0,dash_used:false,dash:null,jump_t:0,jump_ascend:false,crouch:false,slide:null,slide_jump:null,melee:null,respawn_lock:0,grapple_inertia:false,jump_extension:null,input_buffer:null},
     boss:{...level.boss, alive:true, hp:420, vx:0, vy:0, grounded:false, active:false, dead:false, death_t:0, phase:'rifle', phase_t:2, shoot_cd:0, shot_count:0, charge_t:0, charge_pending:false, warning_t:0, charge:null},
     rects, enemies, projectiles:[], spawn_seq:0,
     grapple:emptyGrapple(),
@@ -93,14 +118,16 @@ function resetAll() {
 }
 
 function sampleInput() {
+  const modern=m1ControlsEnabled();
   const map = {
     A: !!keyRaw.get('KeyA'),
     D: !!keyRaw.get('KeyD'),
     S: !!keyRaw.get('KeyS'),
     Jump: !!keyRaw.get('KeyW') || !!keyRaw.get('Space'),
-    F: !!keyRaw.get('KeyF'),
-    LMB: !!keyRaw.get('Mouse0'),
-    RMB: !!keyRaw.get('Mouse2')
+    Dash: modern && (!!keyRaw.get('ShiftLeft') || !!keyRaw.get('ShiftRight')),
+    F: modern ? !!keyRaw.get('KeyJ') : !!keyRaw.get('KeyF'),
+    LMB: !!keyRaw.get('Mouse0') || (modern && !!keyRaw.get('KeyK')),
+    RMB: !!keyRaw.get('Mouse2') || (modern && !!keyRaw.get('KeyU'))
   };
 
   for (const k in input) {
@@ -134,12 +161,19 @@ function emptyGrapple() {
 }
 function grapplePulling() {
   const g=state.grapple;
-  return !g.end && (g.mode==='pull' || g.mode==='stuck');
+  return !g.end && ['pull','stuck','rope_slack','rope_taut'].includes(g.mode);
 }
-function endGrapple() {
-  // Stop its effects now; remove the head/state in the cleanup stage (21.1.12).
-  state.grapple.end=true;
-  state.player.vx=0; state.player.vy=0;
+function endGrapple(reason='') {
+  const g=state.grapple,p=state.player;
+  if(g.end)return;
+  // Momentum can be inherited only from an intentional RMB release in midair.
+  // STUCK, target death, respawn and grapple timeout never cause a false launch.
+  const carry=grappleMomentumEnabled() && reason==='release' &&
+    ['pull','rope_slack','rope_taut'].includes(g.mode) &&
+    !p.grounded && p.respawn_lock===0;
+  g.end=true;
+  p.grapple_inertia=carry;
+  if(!carry){p.vx=0;p.vy=0;}
 }
 function spawnGrapple(aim) {
   const p=state.player;
@@ -162,8 +196,111 @@ function refreshGrappleAnchor() {
     g.head.x=g.anchor.x; g.head.y=g.anchor.y;
   }
 }
+// Geometry opt-in: collision-resolve long corrections in short pieces rather
+// than teleporting over a thin wall or a collision corner in a single tick.
+function m1RopeCollisionSteps(obj,dx,dy) {
+  const parts=Math.max(1,Math.ceil(Math.hypot(dx,dy)/0.2));
+  for(let i=0;i<parts;i++)resolveAxis(obj,dx/parts,dy/parts);
+}
+// Segment clipping against the *interior* of a blocking AABB.
+// A rope touching a surface at the anchor must not be mistaken for a rope
+// running through the surface. Keep the inset proportional for thin walls.
+function m1RopeSegmentOverlap(from,to,rect) {
+  const box=aabb(rect),delta={x:to.x-from.x,y:to.y-from.y};
+  let enter=0,exit=1;
+  for(const axis of ['x','y']){
+    const low=box['min_'+axis],high=box['max_'+axis];
+    const inset=Math.min(EPS*0.5,(high-low)*0.2);
+    const lo=low+inset,hi=high-inset;
+    const d=delta[axis];
+    if(Math.abs(d)<1e-9){
+      if(from[axis]<lo || from[axis]>hi)return null;
+    } else {
+      let t0=(lo-from[axis])/d,t1=(hi-from[axis])/d;
+      if(t0>t1)[t0,t1]=[t1,t0];
+      enter=Math.max(enter,t0);exit=Math.min(exit,t1);
+      if(enter>=exit)return null;
+    }
+  }
+  return enter<exit && exit>0 && enter<1?{enter,exit}:null;
+}
+// An anchored rope does not wrap around new corners yet. If a solid wall
+// intersects the segment between the player and anchor, detach without launch
+// instead of allowing a visually/physically impossible rope through the wall.
+function m1RopeOccluded() {
+  const g=state.grapple,p=state.player;
+  if(!g.anchor)return false;
+  const from={x:p.x,y:p.y},distance=Math.hypot(g.anchor.x-p.x,g.anchor.y-p.y);
+  if(distance<=EPS)return false;
+  for(const obstacle of blockers(false)){
+    const hit=m1RopeSegmentOverlap(from,g.anchor,obstacle);
+    if(!hit)continue;
+    // Old hooks could embed their center slightly within the hit collider.
+    // Ignore only a shallow penetration at the *final endpoint*; a segment
+    // running through the far side of the same wall is still obstructed.
+    if(obstacle===g.target && (1-hit.enter)*distance<=0.55)continue;
+    return true;
+  }
+  return false;
+}
+// Fixed-length rope constraint: gravity and input change velocity, while the
+// rope removes only OUTWARD radial motion. Tangential velocity is preserved.
+// Terrain is resolved before/while correcting stretch, so a wall cannot be
+// crossed simply by projecting the player to the rope circle.
+function moveRopePlayer(input_x,separateBodies=()=>{}) {
+  const g=state.grapple,p=state.player;
+  refreshGrappleAnchor();
+  if(!g.anchor){endGrapple();return;}
+  if(m1GeometryEnabled() && m1RopeOccluded()){
+    endGrapple('obstructed');separateBodies();return;
+  }
+  const rope=Math.max(1.25,g.rope_length||1.25);
+  const maxSpeed=35;
+  p.vx+=input_x*32*DT;
+  if(input_x===0)p.vx*=1-0.15*DT;
+  p.vy=Math.max(-30,p.vy-180*DT);
+  let speed=Math.hypot(p.vx,p.vy);
+  if(speed>maxSpeed){p.vx*=maxSpeed/speed;p.vy*=maxSpeed/speed;}
+  const startDist=Math.hypot(p.x-g.anchor.x,p.y-g.anchor.y);
+  if(startDist>=rope-0.012 && startDist>EPS) {
+    const outward=(p.vx*(p.x-g.anchor.x)+p.vy*(p.y-g.anchor.y))/startDist;
+    if(outward>0){p.vx-=outward*(p.x-g.anchor.x)/startDist;p.vy-=outward*(p.y-g.anchor.y)/startDist;}
+  }
+  if(m1GeometryEnabled())m1RopeCollisionSteps(p,p.vx*DT,p.vy*DT);
+  else resolveAxis(p,p.vx*DT,p.vy*DT);
+  const rx=p.x-g.anchor.x,ry=p.y-g.anchor.y;
+  const dist=Math.hypot(rx,ry);
+  if(dist>rope+EPS){
+    const excess=dist-rope;
+    // Collision-aware correction keeps the tangential component if the wall
+    // blocks only the inward correction's horizontal component.
+    if(m1GeometryEnabled())m1RopeCollisionSteps(p,-rx/dist*excess,-ry/dist*excess);
+    else resolveAxis(p,-rx/dist*excess,-ry/dist*excess);
+  }
+  const finalR={x:p.x-g.anchor.x,y:p.y-g.anchor.y};
+  const finalDist=Math.hypot(finalR.x,finalR.y);
+  if(m1GeometryEnabled() && m1RopeOccluded()){
+    endGrapple('obstructed');separateBodies();return;
+  }
+  if(m1GeometryEnabled() && finalDist>rope+0.15){
+    // There is no rope wrapping implementation yet. When a solid blocks
+    // the inward correction, detach safely instead of stretching forever,
+    // forcing the player through it, or adding an unearned launch impulse.
+    endGrapple('obstructed');separateBodies();return;
+  }
+  if(finalDist>=rope-0.02 && finalDist>EPS){
+    const outward=dot({x:p.vx,y:p.vy},norm(finalR));
+    if(outward>0){const n=norm(finalR);p.vx-=outward*n.x;p.vy-=outward*n.y;}
+    g.mode='rope_taut';
+  } else g.mode='rope_slack';
+  g.tension=Math.max(0,finalDist-(rope-0.02));
+  separateBodies();
+}
 function moveGrapplePlayer(input_x, separateBodies=()=>{}) {
   const g=state.grapple,p=state.player;
+  if(m1RopeEnabled() && (g.mode==='rope_slack'||g.mode==='rope_taut')){
+    moveRopePlayer(input_x,separateBodies);return;
+  }
   refreshGrappleAnchor();
   if (g.mode==='stuck') { p.vx=0; p.vy=0;separateBodies(); return; }
   if (Math.hypot(g.anchor.x-p.x,g.anchor.y-p.y)<=0.8+EPS) { endGrapple();separateBodies(); return; }
@@ -182,7 +319,7 @@ function updateGrapple() {
   if (g.end || g.mode==='none') return;
   if (g.mode!=='fly') {
     refreshGrappleAnchor();
-    if (g.mode!=='stuck' && Math.hypot(g.anchor.x-state.player.x,g.anchor.y-state.player.y)<=0.8+EPS) endGrapple();
+    if (g.mode==='pull' && Math.hypot(g.anchor.x-state.player.x,g.anchor.y-state.player.y)<=0.8+EPS) endGrapple();
     return;
   }
   const h=g.head;
@@ -197,10 +334,31 @@ function updateGrapple() {
     g.target=target;
     g.anchor={x:clamp(h.x,box.min_x,box.max_x),y:clamp(h.y,box.min_y,box.max_y)};
     if (group===characters) g.local={x:g.anchor.x-target.x,y:g.anchor.y-target.y};
-    g.mode='pull'; h.x=g.anchor.x; h.y=g.anchor.y; h.vx=0; h.vy=0;
-    // Pull overrides ongoing aerial movement; no suspended Dash/ascent resumes later.
-    state.player.dash=null; state.player.jump_ascend=false;
-    if (Math.hypot(g.anchor.x-state.player.x,g.anchor.y-state.player.y)<=0.8+EPS) endGrapple();
+    const terrainTarget=group!==characters;
+    const swing=m1RopeEnabled() && terrainTarget;
+    if(swing && m1GeometryEnabled() && target.type!=='OneWay'){
+      // Geometry-mode hooks sit on the first visible impact surface instead
+      // of burying the rope endpoint inside the collision rectangle.
+      const from={x:state.player.x,y:state.player.y};
+      const impact=m1RopeSegmentOverlap(from,{x:h.x,y:h.y},target);
+      if(impact && impact.enter>0){
+        const dx=h.x-from.x,dy=h.y-from.y,L=Math.hypot(dx,dy);
+        const t=Math.max(0,impact.enter-0.003/Math.max(L,EPS));
+        g.anchor={x:from.x+dx*t,y:from.y+dy*t};
+      }
+    }
+    g.mode=swing?'rope_taut':'pull'; h.x=g.anchor.x; h.y=g.anchor.y; h.vx=0; h.vy=0;
+    if(swing){
+      g.rope_length=Math.max(1.25,Math.hypot(g.anchor.x-state.player.x,g.anchor.y-state.player.y));
+      g.tension=0;
+      state.player.slide=null; // new movement owner: rope
+    }
+    state.player.grapple_inertia=false;
+    if(m1BufferEnabled() && state.player.input_buffer){state.player.input_buffer.jump=0;state.player.input_buffer.slide=0;}
+    // Rope/pull takes ownership from slide-jump, Dash and forced ascent.
+    state.player.dash=null;state.player.jump_ascend=false;state.player.slide_jump=null;
+    if(state.player.jump_extension)state.player.jump_extension.carry=false;
+    if (!swing && Math.hypot(g.anchor.x-state.player.x,g.anchor.y-state.player.y)<=0.8+EPS) endGrapple();
     return;
   }
   // Distance is measured from the final (possibly backtracked) spawn center.
@@ -299,17 +457,26 @@ function canStandPlayer() {
   return !blockers().some(r=>penetrates(aabb(standing),aabb(r)));
 }
 function finishSlide() {
-  const p=state.player;p.slide=null;p.vx=0;
+  const p=state.player;p.slide=null;
+  if(!m1BufferEnabled())p.vx=0; // opt-in: carry real slide exit velocity into ground steering
   p.crouch=input.S.down || !canStandPlayer();setPlayerHeight(p.crouch?1:2);
 }
 function prepareStance(input_x,pulling) {
   const p=state.player;
   if(pulling || p.dash)return;
   if(p.slide)return;
-  if(p.grounded && input_x!==0 && input.S.just_pressed) {
-    p.slide={dir:p.facing,t:0,frames:0};p.crouch=false;setPlayerHeight(1);return;
+  const bufferedSlide=m1BufferEnabled() && (p.input_buffer?.slide??0)>0;
+  const slidePressed=m1ControlsEnabled()?(input.Dash.just_pressed||bufferedSlide):input.S.just_pressed;
+  // Buffered jump takes priority over a second, early ground-slide intent.
+  if(p.grounded && input_x!==0 && slidePressed &&
+     !(m1BufferEnabled() && p.input_buffer.jump>0)) {
+    if(bufferedSlide)p.input_buffer.slide=0;
+    p.slide={dir:p.facing,t:0,frames:0};p.crouch=false;
+    setPlayerHeight(m1TimingEnabled()?M1_SLIDE_HEIGHT:1);
+    if(m1TimingEnabled())p.iframe=Math.max(p.iframe,M1_SLIDE_IFRAMES*DT);
+    return;
   }
-  const crouch=(p.grounded && input_x===0 && input.S.down) ||
+  const crouch=(p.grounded && (m1ControlsEnabled() || input_x===0) && input.S.down) ||
     (p.crouch && input.S.down) || !canStandPlayer();
   p.crouch=crouch;setPlayerHeight(crouch?1:2);
 }
@@ -317,32 +484,151 @@ function playerDied() {
   const p=state.player;return p.hp<=0 || p.x<-5 || p.x>365 || p.y>20 || p.y<-40;
 }
 
+// M1 jump experiment: one free air jump and one wall kick per contacted
+// collider face until landing. Dash/grapple never refill these allowances.
+// Prototype tuning reuses the existing jump impulse and slide air steering.
+function resetM1JumpState() {
+  return {air_available:true,walls:[],carry:false,last:'ground'};
+}
+// Connected coplanar collider faces are ONE wall for jump allowance. This
+// prevents a tall wall made from many adjoining rectangles granting a fresh
+// kick at each seam. Separate/offset faces remain distinct surfaces.
+function m1WallSurfaceKey(rect,away) {
+  const colliders=blockers(false);
+  const faceOf=r=>away<0?r.x-r.w/2:r.x+r.w/2;
+  const targetFace=faceOf(rect);
+  const eligible=colliders.filter(r=>Math.abs(faceOf(r)-targetFace)<=EPS);
+  const component=new Set([rect.id]);
+  let grown=true;
+  while(grown){
+    grown=false;
+    for(const candidate of eligible){
+      if(component.has(candidate.id))continue;
+      const adjacent=eligible.some(r=>component.has(r.id) &&
+        Math.min(candidate.y+candidate.h/2,r.y+r.h/2) >=
+        Math.max(candidate.y-candidate.h/2,r.y-r.h/2)-EPS);
+      if(adjacent){component.add(candidate.id);grown=true;}
+    }
+  }
+  return [...component].sort(idCompare)[0]+':'+away;
+}
+function m1JumpWall() {
+  const p=state.player,b=aabb(p),hits=[];
+  for(const r of blockers(false)) {
+    const box=aabb(r);
+    const vertical=Math.min(b.max_y,box.max_y)-Math.max(b.min_y,box.min_y);
+    if(vertical<=0.25)continue; // floors/ceilings and grazing corners are not walls
+    for(const [gap,away] of [[box.min_x-b.max_x,-1],[b.min_x-box.max_x,1]]) {
+      if(gap>=-EPS && gap<=0.02)hits.push({
+        key:m1GeometryEnabled()?m1WallSurfaceKey(r,away):r.id+':'+away,
+        gap,away
+      });
+    }
+  }
+  hits.sort((a,b)=>a.gap-b.gap||idCompare(a.key,b.key));
+  return hits[0]||null;
+}
+function tryM1AirJump(pulling,downThrough) {
+  const p=state.player,j=p.jump_extension;
+  if(!m1JumpsEnabled() || !j || pulling || downThrough || p.grounded ||
+     p.respawn_lock>0 || !input.Jump.just_pressed || !canStandPlayer() ||
+     (m1BufferEnabled() && p.input_buffer.jump>0))return false;
+  const wall=m1JumpWall();
+  if(wall && !j.walls.includes(wall.key)) {
+    j.walls.push(wall.key);j.last='wall';p.vx=wall.away*10;p.facing=wall.away;
+  } else if(j.air_available) {
+    j.air_available=false;j.last='double';
+  } else return false;
+  // A successful jump takes over Dash but does NOT refund Dash usage.
+  // Inherit CURRENT horizontal speed, not any saved slide launch vector.
+  p.dash=null;p.slide=null;p.slide_jump=null;p.grapple_inertia=false;
+  if(m1BufferEnabled()){p.input_buffer.jump=0;p.input_buffer.slide=0;}
+  p.crouch=false;setPlayerHeight(2);p.grounded=false;
+  p.vy=53.334;p.jump_ascend=true;p.jump_t=0;j.carry=true;
+  return true;
+}
+
+// Predict only a downward landing within 9 simulation ticks. Never convert
+// a mid-air jump into a delayed ground jump when a valid wall kick is present.
+// The platform's top must be crossed, and the player must be supported in X.
+function m1LandingSoon() {
+  const p=state.player;
+  if(p.grounded || p.vy>0 || p.dash || grapplePulling())return false;
+  const t=M1_BUFFER_FRAMES*DT;
+  const foot=p.y-p.h/2,projected=foot+p.vy*t-90*t*t;
+  const projectedX=p.x+p.vx*t;
+  return state.rects.some(r=>{
+    if(!['Solid','Wall','OneWay'].includes(r.type) && !(r.type==='Door'&&r.locked))return false;
+    if(r.type==='OneWay' && p.ignore_oneway_id===r.id)return false;
+    const top=r.y+r.h/2;
+    const currentX=p.x+p.w/2>r.x-r.w/2 && p.x-p.w/2<r.x+r.w/2;
+    const futureX=projectedX+p.w/2>r.x-r.w/2 && projectedX-p.w/2<r.x+r.w/2;
+    return (currentX||futureX) && foot>=top+EPS && projected<=top+EPS;
+  });
+}
 function updateLogic() {
   if(state.game_state!=='RUN')return;
   state.aim_input_locked=state.player.respawn_lock>0;
   sampleInput();
   const p=state.player;
+  if(m1JumpsEnabled() && (!p.jump_extension || p.grounded))p.jump_extension=resetM1JumpState();
+  if(m1BufferEnabled() && !p.input_buffer)p.input_buffer={jump:0,slide:0};
   const priorHint=state.hint;
-  p.iframe=Math.max(0,p.iframe-DT);
+  // Timing prototype counts protection on the 60Hz grid: exactly six
+  // protected slide ticks, without floating-point residue extending an i-frame.
+  p.iframe=m1TimingEnabled()?fixedCountdown(p.iframe):Math.max(0,p.iframe-DT);
   p.ignore_timer=fixedCountdown(p.ignore_timer); if (p.ignore_timer<=0){p.ignore_timer=0;p.ignore_oneway_id='';}
 
   let input_x = (input.A.down?-1:0)+(input.D.down?1:0); if (input.A.down&&input.D.down) input_x=0;
   if (input_x!==0) p.facing=input_x;
   const aim = playerAimDir();
 
-  if (input.RMB.just_released && state.grapple.mode!=='none') endGrapple();
+  if(m1BufferEnabled()) {
+    // A tap is eligible for the current tick and the next 8 ticks.
+    const b=p.input_buffer;
+    b.jump=Math.max(0,b.jump-1);
+    b.slide=Math.max(0,b.slide-1);
+    if(input.Jump.just_pressed && !p.grounded && p.respawn_lock===0 &&
+       !grapplePulling() && m1LandingSoon()) {
+      const wall=m1JumpWall();
+      if(!wall || p.jump_extension.walls.includes(wall.key))b.jump=M1_BUFFER_FRAMES;
+    }
+    // A second Shift while Dash is already used should arm a ground slide
+    // near landing, not consume ST or create another airborne Dash.
+    if(input.Dash.just_pressed && !p.grounded && p.dash_used &&
+       input_x!==0 && !grapplePulling() && m1LandingSoon())b.slide=M1_BUFFER_FRAMES;
+    // S+Jump at a OneWay landing is not a request to auto-bounce upward.
+    if(p.grounded && p.standing_oneway_id && input.S.down)b.jump=0;
+  }
+  if (input.RMB.just_released && state.grapple.mode!=='none') endGrapple('release');
   const pulling=grapplePulling();
 
   const downThrough = !pulling && p.grounded && p.standing_oneway_id && input.S.down && input.Jump.just_pressed;
   if (downThrough) { p.ignore_oneway_id = p.standing_oneway_id; p.ignore_timer = 0.2; }
 
   prepareStance(input_x,pulling);
-  const jumpedThisFrame = !pulling && p.grounded && input.Jump.just_pressed && !downThrough && canStandPlayer();
-  if (jumpedThisFrame) { p.crouch=false;p.slide=null;setPlayerHeight(2);p.vy=53.334; p.jump_ascend=true; p.jump_t=0; }
+  const bufferedJump=m1BufferEnabled() && p.input_buffer.jump>0;
+  let jumpedThisFrame = !pulling && p.grounded &&
+    (input.Jump.just_pressed || bufferedJump) && !downThrough && canStandPlayer();
+  if (jumpedThisFrame) {
+    if(m1BufferEnabled()){p.input_buffer.jump=0;p.input_buffer.slide=0;}
+    const slideLaunch=slideJumpMomentumEnabled() && p.slide ? {vx:p.vx,dir:p.slide.dir,t:0} : null;
+    p.crouch=false;p.slide=null;p.slide_jump=slideLaunch;setPlayerHeight(2);
+    p.vy=53.334; p.jump_ascend=true; p.jump_t=0;
+  }
+  if(!jumpedThisFrame)jumpedThisFrame=tryM1AirJump(pulling,downThrough);
   if (p.jump_ascend) { p.jump_t+=DT; if (p.jump_t>0.3||p.vy<=0) p.jump_ascend=false; }
 
-  if (!jumpedThisFrame && !p.grounded && !p.dash && !pulling && input.Jump.just_pressed && !p.dash_used) {
-    if (p.st>=30) { p.st-=30; p.dash_used=true; p.dash={dir:aim,left:6}; p.vx=0; p.vy=0; }
+  // In the v1.1 profile, a second jump key can NEVER silently become Dash.
+  // Shift has one input event and chooses slide on ground or Dash in air.
+  const dashPressed=m1ControlsEnabled()?input.Dash.just_pressed:input.Jump.just_pressed;
+  if (!jumpedThisFrame && !p.grounded && !p.dash && !pulling && dashPressed && !p.dash_used) {
+    if (p.st>=30) { p.st-=30; p.dash_used=true;
+      p.dash={dir:aim,left:m1TimingEnabled()?50*DT*M1_DASH_FRAMES:6};
+      p.slide_jump=null;p.grapple_inertia=false;
+      if(m1JumpsEnabled()){p.jump_extension.carry=false;p.jump_ascend=false;}
+      if(m1BufferEnabled()){p.input_buffer.jump=0;p.input_buffer.slide=0;}
+      p.vx=0; p.vy=0; }
     else { state.hint={text:'体力不足',t:0.5}; }
   }
 
@@ -351,7 +637,10 @@ function updateLogic() {
     else state.hint={text:'体力不足',t:0.5};
   }
 
-  if (input.RMB.just_pressed && state.grapple.mode==='none') spawnGrapple(aim);
+  if (input.RMB.just_pressed && state.grapple.mode==='none' && spawnGrapple(aim)) {
+    // A newly claimed grapple cancels earlier near-landing movement requests.
+    if(m1BufferEnabled()){p.input_buffer.jump=0;p.input_buffer.slide=0;}
+  }
 
   if (pulling) {
     moveGrapplePlayer(input_x,separatePlayerBodies);
@@ -360,25 +649,82 @@ function updateLogic() {
       if(p.slide.t>=0.9 || !p.grounded || p.vx===0){p.slide=null;p.crouch=p.h===1;}
     }
   } else if (p.dash) {
-    const step = Math.min(50*DT,p.dash.left);
-    p.vx = p.dash.dir.x*50; p.vy = p.dash.dir.y*50;
-    const blocked = resolveAxis(p,p.dash.dir.x*step,p.dash.dir.y*step);
-    p.dash.left -= step;
-    if (p.dash.left<=EPS || blocked) { p.dash=null; p.vx=0; p.vy=0; }
+    const activeDash=p.dash;
+    const step=Math.min(50*DT,activeDash.left);
+    p.vx=activeDash.dir.x*50;p.vy=activeDash.dir.y*50;
+    let blocked=false;
+    if(m1TimingEnabled()){
+      // At 50 units/s the 60Hz frame advances 0.833 units. Break this into
+      // <=0.25-unit steps so thin walls and diagonal corners cannot tunnel.
+      const dx=activeDash.dir.x*step,dy=activeDash.dir.y*step;
+      const slices=Math.max(1,Math.ceil(Math.max(Math.abs(dx),Math.abs(dy))/0.25));
+      for(let k=0;k<slices;k++){
+        blocked=resolveAxis(p,dx/slices,dy/slices);
+        if(blocked)break;
+      }
+    } else blocked=resolveAxis(p,activeDash.dir.x*step,activeDash.dir.y*step);
+    activeDash.left-=step;
+    if(activeDash.left<=EPS || blocked || (m1TimingEnabled() && p.grounded)) {
+      p.dash=null;
+      if(m1TimingEnabled()){
+        // Let the collision resolver keep the unblocked tangent component.
+        // On a normal dash expiry, inherit a capped exit impulse (8 units/s)
+        // rather than stopping dead or resuming stale slide-jump velocity.
+        if(!blocked && !p.grounded){
+          p.vx=activeDash.dir.x*8;p.vy=activeDash.dir.y*8;
+        }
+        if(!p.grounded && p.jump_extension)p.jump_extension.carry=true;
+        else if(p.jump_extension)p.jump_extension.carry=false;
+        if(p.grounded)p.vy=0;
+      } else {p.vx=0;p.vy=0;}
+    }
   } else {
-    if (p.slide) {
+    if(m1JumpsEnabled() && p.jump_extension?.carry && !p.grounded) {
+      if(!jumpedThisFrame) {
+        const accel=input_x===0?5:90;
+        p.vx+=clamp(input_x*8-p.vx,-accel*DT,accel*DT);
+      }
+    } else if(p.slide_jump && (jumpedThisFrame || !p.grounded)) {
+      // Preserve launch speed on the jump tick. Thereafter steer from CURRENT velocity,
+      // so D/A/D changes are acceleration-limited and cannot jump back to the launch vector.
+      // Experimental tuning: 90 cm/s^2 directional acceleration, 5 cm/s^2 neutral air drag.
+      if(jumpedThisFrame) p.vx=p.slide_jump.vx;
+      else {
+        p.slide_jump.t+=DT;
+        const desired=input_x*8;
+        const accel=input_x===0?5:90;
+        p.vx+=clamp(desired-p.vx,-accel*DT,accel*DT);
+      }
+    } else if (p.slide) {
       p.slide.t=(p.slide.frames??Math.round(p.slide.t/DT))*DT;
-      p.vx=p.slide.dir*Math.max(0,10-(10/0.9)*p.slide.t);
+      if(m1TimingEnabled()){
+        // Start fast, leave at running speed instead of braking to zero.
+        const progress=clamp((p.slide.frames??0)/(M1_SLIDE_FRAMES-1),0,1);
+        p.vx=p.slide.dir*(10-2*progress);
+      } else p.vx=p.slide.dir*Math.max(0,10-(10/0.9)*p.slide.t);
+    } else if(grappleMomentumEnabled() && p.grapple_inertia && !p.grounded){
+      const desired=input_x*8;
+      const limit=(input_x===0?5:45)*DT;
+      p.vx+=clamp(desired-p.vx,-limit,limit);
+    } else if(m1BufferEnabled()) {
+      // Velocity is continuous across the airborne/grounded boundary.
+      // Ground acceleration / friction are tuned separately from air steering.
+      const desired=p.crouch?0:input_x*8;
+      // 8/70 = 0.114s to accelerate; neutral ground 8/100 = 0.08s to stop.
+      const accel=p.grounded?(input_x!==0?70:(m1TimingEnabled()?100:45)):(input_x!==0?45:5);
+      p.vx+=clamp(desired-p.vx,-accel*DT,accel*DT);
     } else p.vx=p.crouch?0:input_x*8;
     if (!p.jump_ascend) p.vy=Math.max(-15,p.vy-180*DT);
     if (p.jump_ascend) p.vy-=177.78*DT;
     const blocked=resolveAxis(p,p.vx*DT,p.vy*DT);
     if(p.slide) {
       p.slide.frames=(p.slide.frames??0)+1;
-      if(!p.grounded || p.vx===0 || p.slide.frames>=54)finishSlide();
+      if(!p.grounded || p.vx===0 || p.slide.frames>=(m1TimingEnabled()?M1_SLIDE_FRAMES:54))finishSlide();
     }
   }
-  if(p.grounded)p.dash_used=false;
+  if(p.grounded){p.dash_used=false;if(p.slide_jump)p.slide_jump=null;p.grapple_inertia=false;
+    if(m1JumpsEnabled())p.jump_extension=resetM1JumpState();
+  }
   if(!pulling)separatePlayerBodies();
   updateCamera();
   attackQueue=[];
@@ -695,7 +1041,7 @@ function respawn() {
   const p=state.player;
   Object.assign(p,{vx:0,vy:0,w:1,h:2,hp:100,st:100,ammo:60,dash_used:false,dash:null,
     grounded:false,standing_oneway_id:'',iframe:0,ignore_oneway_id:'',ignore_timer:0,
-    jump_ascend:false,jump_t:0,slide:null,crouch:false,melee:null,respawn_lock:1});
+    jump_ascend:false,jump_t:0,slide:null,slide_jump:null,crouch:false,melee:null,respawn_lock:1,grapple_inertia:false,jump_extension:null,input_buffer:null});
   function place(point) {
     p.x=point?.respawn_x??level.player_spawn.x;p.y=point?.respawn_y??level.player_spawn.y;
     p.facing=point?.respawn_facing??level.player_spawn.facing;
@@ -748,7 +1094,12 @@ function render() {
   if (g.head && !g.end) {
     const from=toScreen(state.player.x,state.player.y),to=toScreen(g.head.x,g.head.y);
     ctx.strokeStyle='rgba(160,160,160,1)';ctx.lineWidth=2;
-    ctx.beginPath();ctx.moveTo(from.x,from.y);ctx.lineTo(to.x,to.y);ctx.stroke();
+    ctx.beginPath();ctx.moveTo(from.x,from.y);
+    if(m1RopeEnabled() && g.mode==='rope_slack'){
+      const sag=clamp((g.rope_length-Math.hypot(g.anchor.x-state.player.x,g.anchor.y-state.player.y))*PX_PER_CM*0.6+8,8,42);
+      ctx.quadraticCurveTo((from.x+to.x)/2,(from.y+to.y)/2+sag,to.x,to.y);
+    } else ctx.lineTo(to.x,to.y);
+    ctx.stroke();
     drawRect(g.head,'rgba(160,160,160,1)');
   }
   ctx.font='20px sans-serif';
