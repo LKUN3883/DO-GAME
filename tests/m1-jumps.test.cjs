@@ -429,3 +429,87 @@ for(const hash of ['', '#m1-jumps', '#m1-controls'])test('M1 timing: no change t
   assert.equal(h.run('M1_SLIDE_FRAMES'),18);
   assert.equal(h.run('m1BufferEnabled()'),false);
 });
+
+test('M1 geometry: touching coplanar wall rectangles form one stable kick surface',async()=>{
+  const h=await game('#m1-geometry');
+  h.run("state.rects=[{id:'Z_TOP',type:'Wall',x:51.001,y:-12.5,w:1,h:5},{id:'A_BOTTOM',type:'Wall',x:51.001,y:-17.5,w:1,h:5}];");
+  const keys=h.plain("state.rects.map(r=>m1WallSurfaceKey(r,-1))");
+  assert.deepEqual(keys,['A_BOTTOM:-1','A_BOTTOM:-1']);
+  h.run('state.rects.reverse()');
+  assert.deepEqual(h.plain("state.rects.map(r=>m1WallSurfaceKey(r,-1))"),keys);
+});
+test('M1 geometry: one airborne kick cannot repeat along adjoining wall segments',async()=>{
+  const h=await game('#m1-geometry');
+  h.run("state.rects=[{id:'TOP',type:'Wall',x:51.001,y:-12.5,w:1,h:5},{id:'BOTTOM',type:'Wall',x:51.001,y:-17.5,w:1,h:5}];state.player.jump_extension.air_available=false;Object.assign(state.player,{x:50,y:-12,vx:0,vy:-1,grounded:false,jump_ascend:false})");
+  h.tap('Space');
+  assert.equal(h.run('state.player.jump_extension.last'),'wall');
+  const first=h.plain('state.player.jump_extension.walls');
+  assert.equal(first.length,1);
+  h.tick();
+  h.run("Object.assign(state.player,{x:50,y:-18,vx:0,vy:-1,grounded:false,jump_ascend:false})");
+  h.tap('Space');
+  assert.deepEqual(h.plain('state.player.jump_extension.walls'),first);
+  assert.ok(h.run('state.player.vy')<0,'second kick along identical surface is denied');
+});
+test('M1 geometry: distinct same-facing walls and disconnected segments have separate allowances',async()=>{
+  const h=await game('#m1-geometry');
+  h.run("state.rects=[{id:'A',type:'Wall',x:51.001,y:-11,w:1,h:4},{id:'B',type:'Wall',x:51.001,y:-19,w:1,h:4},{id:'C',type:'Wall',x:52.001,y:-15,w:1,h:4}];");
+  assert.notEqual(h.run("m1WallSurfaceKey(state.rects[0],-1)"),h.run("m1WallSurfaceKey(state.rects[1],-1)"));
+  assert.notEqual(h.run("m1WallSurfaceKey(state.rects[0],-1)"),h.run("m1WallSurfaceKey(state.rects[2],-1)"));
+});
+test('M1 geometry: closed door is a wall face, open door and OneWay side are not',async()=>{
+  const h=await game('#m1-geometry');
+  h.run("state.rects=[{id:'DOOR',type:'Door',locked:true,x:51.001,y:-15,w:1,h:8},{id:'OW',type:'OneWay',x:51.001,y:-25,w:1,h:2}];");
+  h.run('Object.assign(state.player,{x:50,y:-15,grounded:false,vy:-1});state.player.jump_extension.air_available=false');
+  assert.equal(h.run('m1JumpWall().key'),'DOOR:-1');
+  h.run('state.rects[0].locked=false');
+  assert.equal(h.run('m1JumpWall()'),null);
+});
+test('M1 geometry: thin wall blocks high-speed rope displacement',async()=>{
+  const h=await game('#m1-geometry');
+  h.run("state.rects=[{id:'THIN',type:'Wall',x:50,y:-15,w:0.04,h:20}];Object.assign(state.player,{x:49,y:-15,vx:35,vy:0,grounded:false,respawn_lock:0});state.grapple={...emptyGrapple(),mode:'rope_slack',anchor:{x:49,y:-10},head:{x:49,y:-10},rope_length:12};");
+  h.run('moveRopePlayer(0)');
+  const p=h.plain('({x:state.player.x,mode:state.grapple.mode,penetrating:blockers().some(r=>penetrates(aabb(state.player),aabb(r)))})');
+  assert.ok(p.x<49.49,'horizontal rope motion cannot skip a 0.04-unit wall');
+  assert.equal(p.penetrating,false);
+  assert.notEqual(p.mode,'stuck');
+});
+test('M1 geometry: impossible rope projection is safely canceled, never teleports across wall',async()=>{
+  const h=await game('#m1-geometry');
+  h.run("state.rects=[{id:'THIN',type:'Wall',x:50,y:-15,w:0.04,h:20}];Object.assign(state.player,{x:48,y:-15,vx:0,vy:0,grounded:false,respawn_lock:0});state.grapple={...emptyGrapple(),mode:'rope_taut',anchor:{x:55,y:-15},head:{x:55,y:-15},rope_length:2};");
+  h.run('moveRopePlayer(0)');
+  const x=h.plain('({x:state.player.x,y:state.player.y,vx:state.player.vx,vy:state.player.vy,end:state.grapple.end,inertia:state.player.grapple_inertia,penetrating:blockers().some(r=>penetrates(aabb(state.player),aabb(r)))})');
+  assert.ok(x.x<49.5,'rope cannot project player through wall');
+  assert.equal(x.penetrating,false);assert.equal(x.end,true);
+  assert.equal(x.inertia,false);assert.equal(x.vx,0);assert.equal(x.vy,0);
+  h.run('cleanup()');assert.equal(h.run('state.grapple.mode'),'none');
+});
+test('M1 geometry: regular taut rope preserves bounded length and never enters STUCK',async()=>{
+  const h=await game('#m1-geometry');
+  h.run("state.rects=[];Object.assign(state.player,{x:50,y:-20,vx:0,vy:0,grounded:false,respawn_lock:0});state.grapple={...emptyGrapple(),mode:'rope_taut',anchor:{x:54,y:-16},head:{x:54,y:-16},rope_length:Math.hypot(4,4)};");
+  let maxError=0;
+  for(let i=0;i<45;i++){
+    h.run('moveRopePlayer(1)');
+    const p=h.plain("({mode:state.grapple.mode,end:state.grapple.end,d:Math.hypot(state.player.x-state.grapple.anchor.x,state.player.y-state.grapple.anchor.y),L:state.grapple.rope_length})");
+    assert.equal(p.end,false);assert.notEqual(p.mode,'stuck');
+    maxError=Math.max(maxError,p.d-p.L);
+  }
+  assert.ok(maxError<0.15,'rope stays within correction tolerance');
+});
+test('M1 geometry: rope corner motion with thin solids never overlaps walls',async()=>{
+  const h=await game('#m1-geometry');
+  h.run("state.rects=[{id:'SIDE',type:'Wall',x:52,y:-18,w:0.05,h:10},{id:'TOP',type:'Solid',x:55,y:-24,w:6,h:0.1}];Object.assign(state.player,{x:50,y:-20,vx:0,vy:0,grounded:false,respawn_lock:0});state.grapple={...emptyGrapple(),mode:'rope_taut',anchor:{x:50,y:-14},head:{x:50,y:-14},rope_length:6};");
+  for(let i=0;i<60;i++){
+    if(h.run('state.grapple.end'))break;
+    h.run('moveRopePlayer(1)');
+    assert.equal(h.run('blockers().some(r=>penetrates(aabb(state.player),aabb(r)))'),false);
+    assert.notEqual(h.run('state.grapple.mode'),'stuck');
+  }
+});
+for(const hash of ['', '#m1-timing', '#m1-buffer'])test('M1 geometry: previous profile unaffected '+hash,async()=>{
+  const h=await game(hash);
+  assert.equal(h.run('m1GeometryEnabled()'),false);
+  assert.equal(h.run('m1RopeEnabled()'),hash!=='');
+  h.run("state.rects=[{id:'Z',type:'Wall',x:51.001,y:-12.5,w:1,h:5},{id:'A',type:'Wall',x:51.001,y:-17.5,w:1,h:5}]");
+  // Earlier modes still use collider IDs directly, never the unified key.\n  h.run("Object.assign(state.player,{x:50,y:-12,vy:-1,grounded:false})");\n  assert.equal(h.run('m1JumpWall().key'),'Z:-1');
+});
