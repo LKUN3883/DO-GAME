@@ -202,6 +202,47 @@ function m1RopeCollisionSteps(obj,dx,dy) {
   const parts=Math.max(1,Math.ceil(Math.hypot(dx,dy)/0.2));
   for(let i=0;i<parts;i++)resolveAxis(obj,dx/parts,dy/parts);
 }
+// Segment clipping against the *interior* of a blocking AABB.
+// A rope touching a surface at the anchor must not be mistaken for a rope
+// running through the surface. Keep the inset proportional for thin walls.
+function m1RopeSegmentOverlap(from,to,rect) {
+  const box=aabb(rect),delta={x:to.x-from.x,y:to.y-from.y};
+  let enter=0,exit=1;
+  for(const axis of ['x','y']){
+    const low=box['min_'+axis],high=box['max_'+axis];
+    const inset=Math.min(EPS*0.5,(high-low)*0.2);
+    const lo=low+inset,hi=high-inset;
+    const d=delta[axis];
+    if(Math.abs(d)<1e-9){
+      if(from[axis]<lo || from[axis]>hi)return null;
+    } else {
+      let t0=(lo-from[axis])/d,t1=(hi-from[axis])/d;
+      if(t0>t1)[t0,t1]=[t1,t0];
+      enter=Math.max(enter,t0);exit=Math.min(exit,t1);
+      if(enter>=exit)return null;
+    }
+  }
+  return enter<exit && exit>0 && enter<1?{enter,exit}:null;
+}
+// An anchored rope does not wrap around new corners yet. If a solid wall
+// intersects the segment between the player and anchor, detach without launch
+// instead of allowing a visually/physically impossible rope through the wall.
+function m1RopeOccluded() {
+  const g=state.grapple,p=state.player;
+  if(!g.anchor)return false;
+  const from={x:p.x,y:p.y},distance=Math.hypot(g.anchor.x-p.x,g.anchor.y-p.y);
+  if(distance<=EPS)return false;
+  for(const obstacle of blockers(false)){
+    const hit=m1RopeSegmentOverlap(from,g.anchor,obstacle);
+    if(!hit)continue;
+    // Old hooks could embed their center slightly within the hit collider.
+    // Ignore only a shallow penetration at the *final endpoint*; a segment
+    // running through the far side of the same wall is still obstructed.
+    if(obstacle===g.target && (1-hit.enter)*distance<=0.55)continue;
+    return true;
+  }
+  return false;
+}
 // Fixed-length rope constraint: gravity and input change velocity, while the
 // rope removes only OUTWARD radial motion. Tangential velocity is preserved.
 // Terrain is resolved before/while correcting stretch, so a wall cannot be
@@ -210,6 +251,9 @@ function moveRopePlayer(input_x,separateBodies=()=>{}) {
   const g=state.grapple,p=state.player;
   refreshGrappleAnchor();
   if(!g.anchor){endGrapple();return;}
+  if(m1GeometryEnabled() && m1RopeOccluded()){
+    endGrapple('obstructed');separateBodies();return;
+  }
   const rope=Math.max(1.25,g.rope_length||1.25);
   const maxSpeed=35;
   p.vx+=input_x*32*DT;
@@ -235,6 +279,9 @@ function moveRopePlayer(input_x,separateBodies=()=>{}) {
   }
   const finalR={x:p.x-g.anchor.x,y:p.y-g.anchor.y};
   const finalDist=Math.hypot(finalR.x,finalR.y);
+  if(m1GeometryEnabled() && m1RopeOccluded()){
+    endGrapple('obstructed');separateBodies();return;
+  }
   if(m1GeometryEnabled() && finalDist>rope+0.15){
     // There is no rope wrapping implementation yet. When a solid blocks
     // the inward correction, detach safely instead of stretching forever,
@@ -289,6 +336,17 @@ function updateGrapple() {
     if (group===characters) g.local={x:g.anchor.x-target.x,y:g.anchor.y-target.y};
     const terrainTarget=group!==characters;
     const swing=m1RopeEnabled() && terrainTarget;
+    if(swing && m1GeometryEnabled() && target.type!=='OneWay'){
+      // Geometry-mode hooks sit on the first visible impact surface instead
+      // of burying the rope endpoint inside the collision rectangle.
+      const from={x:state.player.x,y:state.player.y};
+      const impact=m1RopeSegmentOverlap(from,{x:h.x,y:h.y},target);
+      if(impact && impact.enter>0){
+        const dx=h.x-from.x,dy=h.y-from.y,L=Math.hypot(dx,dy);
+        const t=Math.max(0,impact.enter-0.003/Math.max(L,EPS));
+        g.anchor={x:from.x+dx*t,y:from.y+dy*t};
+      }
+    }
     g.mode=swing?'rope_taut':'pull'; h.x=g.anchor.x; h.y=g.anchor.y; h.vx=0; h.vy=0;
     if(swing){
       g.rope_length=Math.max(1.25,Math.hypot(g.anchor.x-state.player.x,g.anchor.y-state.player.y));
