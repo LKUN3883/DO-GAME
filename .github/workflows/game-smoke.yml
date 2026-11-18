@@ -56,6 +56,12 @@ jobs:
       - run: npm run test:browser
         env:
           BROWSER_SCREENSHOT: test-artifacts/boss-room.png
+      - name: Build standalone experimental HTML (no Pages deploy)
+        run: npm run build:preview
+        env:
+          M1_PREVIEW_REVISION: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Offline HTML file-protocol acceptance
+        run: npm run test:preview
       - name: Game feel baseline and display regression
         run: node --test tests/game-feel.test.cjs
         env:
@@ -72,6 +78,7 @@ jobs:
           name: chromium-acceptance-${{ matrix.os }}
           path: |
             test-artifacts/*.png
+            test-artifacts/*.html
             test-artifacts/*.json
             test-artifacts/*.csv
             browser-results/
