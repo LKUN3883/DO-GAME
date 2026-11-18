@@ -190,3 +190,27 @@ test('browser M1 geometry: moving between adjoining wall segments cannot refresh
   await shot(p,run,'m1-connected-wall-jump-limit');
   metrics.scenarios.push({case:'connected-wall-single-kick',first,repeat});
 });
+
+
+test('browser M1 geometry: real U grapple attaches to visible wall face and cancels behind new blocker',async t=>{
+  const {p,run}=await game(t,'#m1-geometry');
+  await run("state.rects=[{id:'ANCHOR',type:'Wall',x:55,y:-20,w:1,h:20}];state.enemies=[];Object.assign(state.player,{x:50,y:-20,vx:0,vy:0,grounded:false,respawn_lock:0});state.cam={x:50,y:-20};mx=1279;my=360");
+  await p.keyboard.down('u');
+  let ticks=0;
+  while(!(await run("['rope_slack','rope_taut'].includes(state.grapple.mode)"))&&ticks++<25)await tick(p);
+  assert.ok(ticks<25,'U must attach to the wall');
+  const attached=await run("({x:state.grapple.anchor.x,left:state.rects[0].x-state.rects[0].w/2,occluded:m1RopeOccluded(),mode:state.grapple.mode})");
+  assert.ok(attached.x<=attached.left+0.001 && attached.x>=attached.left-0.03);
+  assert.equal(attached.occluded,false);
+  await shot(p,run,'m1-visible-wall-anchor');
+  await run("Object.assign(state.player,{x:50,y:-20,vx:0,vy:0,grounded:false});state.rects.push({id:'LATE_BARRIER',type:'Wall',x:52,y:-20,w:0.04,h:16});");
+  await tick(p);
+  const stopped=await run("({mode:state.grapple.mode,inertia:state.player.grapple_inertia,vx:state.player.vx,vy:state.player.vy,penetrating:blockers().some(r=>penetrates(aabb(state.player),aabb(r)))})");
+  assert.equal(stopped.mode,'none','blocked rope must release on the next simulation step');
+  assert.equal(stopped.inertia,false,'environmental obstruction cannot count as deliberate release');
+  assert.equal(stopped.vx,0);assert.equal(stopped.vy,0);
+  assert.equal(stopped.penetrating,false);
+  await shot(p,run,'m1-occluded-rope-release');
+  await p.keyboard.up('u');
+  metrics.scenarios.push({case:'occluded-rope-release',ticks,attached,stopped});
+});
