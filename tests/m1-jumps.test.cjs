@@ -515,3 +515,80 @@ for(const hash of ['', '#m1-timing', '#m1-buffer'])test('M1 geometry: previous p
   h.run("Object.assign(state.player,{x:50,y:-12,vy:-1,grounded:false})");
   assert.equal(h.run('m1JumpWall().key'),'Z:-1');
 });
+
+
+test('M1 geometry LOS: narrow blocking wall between player and anchor cancels rope without launch',async()=>{
+  const h=await game('#m1-geometry');
+  h.run("state.rects=[{id:'SEPARATOR',type:'Wall',x:55,y:-15,w:0.04,h:15}];Object.assign(state.player,{x:50,y:-15,vx:4,vy:2,grounded:false,respawn_lock:0});state.grapple={...emptyGrapple(),mode:'rope_slack',anchor:{x:60,y:-15},head:{x:60,y:-15},rope_length:12};");
+  assert.equal(h.run('m1RopeOccluded()'),true);
+  h.run('moveRopePlayer(0)');
+  const result=h.plain('({end:state.grapple.end,carry:state.player.grapple_inertia,vx:state.player.vx,vy:state.player.vy,x:state.player.x})');
+  assert.deepEqual(result,{end:true,carry:false,vx:0,vy:0,x:50},'obstructed rope must not teleport the player or inherit a false launch');
+  h.run('cleanup()');assert.equal(h.run('state.grapple.mode'),'none');
+});
+test('M1 geometry LOS: visible anchor on wall face is not treated as obstruction',async()=>{
+  const h=await game('#m1-geometry');
+  h.run("state.rects=[{id:'ANCHOR',type:'Wall',x:55,y:-15,w:1,h:10}];Object.assign(state.player,{x:50,y:-15,vx:0,vy:0,grounded:false,respawn_lock:0});state.grapple={...emptyGrapple(),mode:'rope_taut',anchor:{x:54.5,y:-15},head:{x:54.5,y:-15},target:state.rects[0],rope_length:4.5};");
+  assert.equal(h.run('m1RopeOccluded()'),false,'touching the anchor wall only at the endpoint is valid');
+  h.run('moveRopePlayer(0)');
+  assert.equal(h.run('state.grapple.end'),false,'valid taut rope must remain anchored');
+  assert.ok(h.run('state.grapple.mode==="rope_taut" || state.grapple.mode==="rope_slack"'));
+});
+test('M1 geometry LOS: shallow embedded old anchor tolerated, deep far-side anchor rejected',async()=>{
+  const h=await game('#m1-geometry');
+  h.run("state.rects=[{id:'ANCHOR',type:'Wall',x:55,y:-15,w:1,h:12}];Object.assign(state.player,{x:50,y:-15,vx:0,vy:0,grounded:false});state.grapple={...emptyGrapple(),mode:'rope_taut',anchor:{x:54.68,y:-15},target:state.rects[0],head:{x:54.68,y:-15},rope_length:4.68};");
+  assert.equal(h.run('m1RopeOccluded()'),false,'short final penetration due to old grapple-head width is tolerated');
+  h.run("state.grapple.anchor={x:55.4,y:-15};state.grapple.head={x:55.4,y:-15};state.grapple.rope_length=5.4");
+  assert.equal(h.run('m1RopeOccluded()'),true,'deep path through anchor wall cannot be silently accepted');
+  h.run('moveRopePlayer(0)');assert.equal(h.run('state.grapple.end'),true);
+});
+test('M1 geometry LOS: hook creates near-surface anchor rather than burying tip inside wall',async()=>{
+  const h=await game('#m1-geometry');
+  h.run("state.rects=[{id:'IMPACT',type:'Wall',x:55,y:-15,w:1,h:10}];Object.assign(state.player,{x:50,y:-15,grounded:false,respawn_lock:0});state.grapple={...emptyGrapple(),mode:'fly',head:{x:54.45,y:-15,w:0.3,h:0.3,vx:28,vy:0,origin:{x:50,y:-15}}};updateGrapple()");
+  const r=h.plain("({mode:state.grapple.mode,x:state.grapple.anchor.x,left:state.rects[0].x-state.rects[0].w/2,occluded:m1RopeOccluded()})");
+  assert.equal(r.mode,'rope_taut');assert.ok(r.x<=r.left+0.001 && r.x>=r.left-0.03,'hook snaps to visible impact face');
+  assert.equal(r.occluded,false,'a valid face anchor must not immediately cancel itself');
+});
+test('M1 geometry LOS: a newly closed door or introduced wall breaks an otherwise free rope',async()=>{
+  const h=await game('#m1-geometry');
+  h.run("state.rects=[{id:'GATE',type:'Door',locked:false,x:55,y:-15,w:1,h:14}];Object.assign(state.player,{x:50,y:-15,vx:0,vy:0,grounded:false,respawn_lock:0});state.grapple={...emptyGrapple(),mode:'rope_slack',anchor:{x:60,y:-15},head:{x:60,y:-15},rope_length:12};");
+  assert.equal(h.run('m1RopeOccluded()'),false,'unlocked door is not blocking');
+  h.run('state.rects[0].locked=true');
+  assert.equal(h.run('m1RopeOccluded()'),true,'door becomes blocking on the next tick');
+  h.run('moveRopePlayer(0)');
+  assert.equal(h.run('state.grapple.end'),true);assert.equal(h.run('state.player.grapple_inertia'),false);
+});
+test('M1 geometry LOS: OneWay and trigger volumes do not erroneously cut ropes',async()=>{
+  const h=await game('#m1-geometry');
+  h.run("state.rects=[{id:'PLATFORM',type:'OneWay',x:55,y:-15,w:1,h:14},{id:'TRIGGER',type:'Trigger',x:57,y:-15,w:1,h:14}];Object.assign(state.player,{x:50,y:-15,vx:0,vy:0,grounded:false});state.grapple={...emptyGrapple(),mode:'rope_slack',anchor:{x:60,y:-15},head:{x:60,y:-15},rope_length:12};");
+  assert.equal(h.run('m1RopeOccluded()'),false);
+  h.run('moveRopePlayer(0)');assert.equal(h.run('state.grapple.end'),false);
+});
+test('M1 geometry LOS: grazing wall boundary does not sever rope',async()=>{
+  const h=await game('#m1-geometry');
+  h.run("state.rects=[{id:'EDGE',type:'Wall',x:55,y:-14,w:1,h:2}];Object.assign(state.player,{x:50,y:-15,vx:0,vy:0,grounded:false});state.grapple={...emptyGrapple(),mode:'rope_slack',anchor:{x:60,y:-15},head:{x:60,y:-15},rope_length:12};");
+  assert.equal(h.run('m1RopeOccluded()'),false,'line along exterior bottom edge is not inside wall');
+  h.run('moveRopePlayer(0)');assert.equal(h.run('state.grapple.end'),false);
+});
+test('M1 geometry LOS: obstacle beyond rope anchor does not cut the segment',async()=>{
+  const h=await game('#m1-geometry');
+  h.run("state.rects=[{id:'BEYOND',type:'Wall',x:62,y:-15,w:0.04,h:15}];Object.assign(state.player,{x:50,y:-15,vx:0,vy:0,grounded:false});state.grapple={...emptyGrapple(),mode:'rope_slack',anchor:{x:60,y:-15},head:{x:60,y:-15},rope_length:12};");
+  assert.equal(h.run('m1RopeOccluded()'),false);
+  h.run('moveRopePlayer(0)');assert.equal(h.run('state.grapple.end'),false);
+});
+test('M1 geometry LOS: a slanted rope crossing a very thin wall is detected',async()=>{
+  const h=await game('#m1-geometry');
+  h.run("state.rects=[{id:'DIAGONAL',type:'Wall',x:55,y:-12,w:0.005,h:15}];Object.assign(state.player,{x:50,y:-15,vx:0,vy:0,grounded:false});state.grapple={...emptyGrapple(),mode:'rope_taut',anchor:{x:60,y:-9},head:{x:60,y:-9},rope_length:12};");
+  assert.equal(h.run('m1RopeOccluded()'),true,'thin wall in sloping segment must be observed');
+  h.run('moveRopePlayer(0)');assert.equal(h.run('state.grapple.end'),true);
+});
+for(const hash of ['', '#m1-timing', '#m1-buffer'])
+test('M1 geometry LOS guard is opt-in; earlier modes do not auto-sever the rope '+hash,async()=>{
+  const h=await game(hash);
+  h.run("state.rects=[{id:'SEPARATOR',type:'Wall',x:55,y:-15,w:0.04,h:15}];Object.assign(state.player,{x:50,y:-15,vx:0,vy:0,grounded:false});state.grapple={...emptyGrapple(),mode:'rope_slack',anchor:{x:60,y:-15},head:{x:60,y:-15},rope_length:12};");
+  assert.equal(h.run('m1GeometryEnabled()'),false);
+  if(hash!==''){
+    h.run('moveRopePlayer(0)');
+    assert.equal(h.run('state.grapple.end'),false,'earlier rope prototypes preserve previous semantics');
+  }
+});
