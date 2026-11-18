@@ -175,3 +175,18 @@ test('browser M1 timing: thin wall stops Dash without penetration; air steering 
   await shot(p,run,'m1-thin-wall-dash-stop');
   metrics.scenarios.push({case:'thin-wall-dash',stopped,escaped});
 });
+
+test('browser M1 geometry: moving between adjoining wall segments cannot refresh wall kick',async t=>{
+  const {p,run}=await game(t,'#m1-geometry');
+  await run("state.rects=[{id:'UPPER',type:'Wall',x:51.001,y:-12.5,w:1,h:5},{id:'LOWER',type:'Wall',x:51.001,y:-17.5,w:1,h:5}];Object.assign(state.player,{x:50,y:-12,vx:0,vy:-1,grounded:false,jump_ascend:false,respawn_lock:0});state.player.jump_extension.air_available=false");
+  await p.keyboard.down('Space');await tick(p);await p.keyboard.up('Space');await tick(p);
+  const first=await run("({walls:[...state.player.jump_extension.walls],last:state.player.jump_extension.last})");
+  assert.equal(first.last,'wall');assert.equal(first.walls.length,1);
+  await run("Object.assign(state.player,{x:50,y:-18,vx:0,vy:-1,grounded:false,jump_ascend:false})");
+  await p.keyboard.down('Space');await tick(p);await p.keyboard.up('Space');
+  const repeat=await run("({walls:[...state.player.jump_extension.walls],vy:state.player.vy})");
+  assert.deepEqual(repeat.walls,first.walls);
+  assert.ok(repeat.vy<0,'second segment of the same face cannot grant another kick');
+  await shot(p,run,'m1-connected-wall-jump-limit');
+  metrics.scenarios.push({case:'connected-wall-single-kick',first,repeat});
+});
